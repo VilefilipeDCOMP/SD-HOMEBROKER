@@ -1,0 +1,164 @@
+/* ---------- Tema (cores e fontes em um só lugar) ---------- */
+:root {
+  --bg: #0b1220;
+  --painel: #111a2e;
+  --linha-bg: #0f1830;
+  --borda: #1f2b45;
+  --campo: #2a3856;
+  --texto: #e6ebf5;
+  --suave: #9aa8c4;
+  --azul: #38bdf8;
+  --azul-hover: #7dd3fc;
+  --azul-texto: #06202e;
+  --alta: #34d399;
+  --baixa: #f87171;
+  --compra: #15803d;
+  --venda: #b91c1c;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--texto);
+  font-family: var(--sans);
+}
+
+h1, h2, p { margin: 0; }
+.mono { font-family: var(--mono); }
+.dir { text-align: right; }
+
+/* ---------- Peças reutilizáveis ---------- */
+.cartao {
+  background: var(--painel);
+  border: 1px solid var(--borda);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cartao h2 { font-size: 16px; font-weight: 600; }
+
+.logo {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: var(--azul);
+  display: flex; align-items: center; justify-content: center;
+}
+.logo-grande { width: 48px; height: 48px; border-radius: 12px; }
+
+.campo-grupo { display: flex; flex-direction: column; gap: 8px; }
+label { font-size: 13px; font-weight: 500; color: var(--suave); }
+.nota { font-size: 12px; color: var(--suave); }
+
+input, select {
+  height: 46px;
+  width: 100%;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--campo);
+  background: var(--bg);
+  color: var(--texto);
+  font-family: inherit;
+  font-size: 15px;
+}
+input::placeholder { color: #7886a3; }
+input:focus, select:focus, button:focus-visible {
+  outline: 2px solid var(--azul);
+  outline-offset: 1px;
+}
+
+.btn {
+  height: 48px;
+  border: 0;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-azul { background: var(--azul); color: var(--azul-texto); }
+.btn-azul:hover { background: var(--azul-hover); }
+.btn-compra { background: var(--compra); color: #fff; }
+.btn-venda  { background: var(--venda);  color: #fff; }
+.btn-compra:hover, .btn-venda:hover { filter: brightness(1.1); }
+
+.link {
+  background: none; border: 0; padding: 0;
+  color: var(--suave); font-family: inherit; font-size: 14px; cursor: pointer;
+}
+.link:hover { color: var(--texto); }
+
+/* login pro max */
+.login {
+  position: relative;
+  min-height: 100vh;
+  padding: 24px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.login-fundo { position: absolute; left: 0; bottom: 0; width: 100%; height: 45%; }
+.login-cartao { position: relative; width: 100%; max-width: 420px; padding: 36px 32px; gap: 22px; }
+.login-cartao h1 { font-size: 26px; font-weight: 600; line-height: 1.2; }
+.sub { font-size: 14px; line-height: 1.5; color: var(--suave); margin-top: -8px; }
+
+/* mercado geral */
+#tela-mercado { min-height: 100vh; display: flex; flex-direction: column; }
+
+.topo {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 16px 32px;
+  background: var(--painel);
+  border-bottom: 1px solid var(--borda);
+}
+.topo-esq, .topo-dir { display: flex; align-items: center; }
+.topo-esq { gap: 12px; font-size: 18px; }
+.topo-dir { gap: 24px; }
+.saldo { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.saldo span { font-size: 12px; color: var(--suave); }
+.saldo strong { font-size: 22px; font-weight: 500; color: var(--alta); }
+
+.conteudo { flex: 1; padding: 24px 32px 32px; display: flex; flex-direction: column; gap: 24px; }
+.colunas { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 24px; }
+.mercado { flex: 3 1 420px; min-width: 0; }
+.boleta  { flex: 2 1 340px; min-width: 0; gap: 18px; }
+
+.linha {
+  display: grid;
+  grid-template-columns: 1.2fr 1.4fr 1fr;
+  gap: 12px;
+  align-items: center;
+}
+.cabecalho-tabela {
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--borda);
+  font-size: 12px; font-weight: 500; color: var(--suave);
+}
+.tabela { display: flex; flex-direction: column; gap: 4px; }
+.tabela .linha { padding: 12px; border-radius: 10px; background: var(--linha-bg); }
+.tabela .codigo { font-weight: 600; }
+.tabela .preco { font-family: var(--mono); font-size: 15px; text-align: right; }
+.tabela .variacao { font-family: var(--mono); font-size: 13px; text-align: right; }
+
+.botoes { display: flex; gap: 12px; margin-top: 4px; }
+.botoes .btn { flex: 1; }
+
+/* feed massa */
+.feed { display: flex; flex-direction: column; gap: 8px; }
+.feed-item { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; line-height: 1.5; }
+.feed-item time { font-family: var(--mono); font-size: 13px; color: var(--suave); }
+
+/* cores geral */
+.alta, .ok { color: var(--alta); }
+.baixa, .erro { color: var(--baixa); }
+.neutro { color: var(--suave); }
+
+/* responsividade */
+@media (max-width: 600px) {
+  .topo, .conteudo { padding-left: 16px; padding-right: 16px; }
+}

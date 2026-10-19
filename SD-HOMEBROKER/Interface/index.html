@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador de Bolsa de Valores</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+ 
+  <main id="tela-login" class="login">
+    <svg class="login-fundo" aria-hidden="true" viewBox="0 0 1200 300" preserveAspectRatio="none">
+      <polyline points="0,260 100,230 200,245 300,190 400,205 500,150 600,170 700,110 800,130 900,70 1000,90 1100,40 1200,55"
+                fill="none" stroke="#1B2A4A" stroke-width="3" vector-effect="non-scaling-stroke"/>
+    </svg>
+
+    <form id="form-login" class="cartao login-cartao">
+      <div class="logo logo-grande">
+        <svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#06202E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>
+        </svg>
+      </div>
+      <h1>Simulador de Bolsa de Valores</h1>
+      <p class="sub">Pratique operações no mercado com saldo virtual, cuida papai</p>
+
+      <div class="campo-grupo">
+        <label for="usuario">Usuário</label>
+        <input id="usuario" type="text" placeholder="Seu nome" autocomplete="off">
+      </div>
+      <div class="campo-grupo">
+        <label for="senha">Senha</label>
+        <input id="senha" type="password" placeholder="••••••••">
+      </div>
+
+      <button type="submit" class="btn btn-azul">Entrar no mercado</button>
+    </form>
+  </main>
+
+  <div id="tela-mercado" hidden>
+
+    <header class="topo">
+      <div class="topo-esq">
+        <div class="logo">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06202E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>
+          </svg>
+        </div>
+        <strong id="ola">Olá!</strong>
+      </div>
+      <div class="topo-dir">
+        <div class="saldo">
+          <span>Saldo disponível</span>
+          <strong id="saldo" class="mono">R$ 0,00</strong>
+        </div>
+        <button id="btn-sair" type="button" class="link">Sair</button>
+      </div>
+    </header>
+
+    <main class="conteudo">
+      <div class="colunas">
+
+        <!-- Mercado (visualização) -->
+        <section class="cartao mercado">
+          <h2>Mercado</h2>
+          <div class="linha cabecalho-tabela">
+            <span>Ativo</span>
+            <span class="dir">Preço atual</span>
+            <span class="dir">Variação</span>
+          </div>
+          <div id="tabela" class="tabela"></div>
+          <p class="nota">Os preços são atualizados automaticamente pelo servidor.</p>
+        </section>
+
+        <!-- Boleta (envio de ordens) -->
+        <section class="cartao boleta">
+          <h2>Boleta</h2>
+
+          <div class="campo-grupo">
+            <label for="ativo">Selecione o ativo</label>
+            <select id="ativo"></select>
+            <span class="nota" id="posicao"></span>
+          </div>
+
+          <div class="campo-grupo">
+            <label for="qtd">Quantidade</label>
+            <input id="qtd" type="text" inputmode="numeric" value="100" class="mono">
+          </div>
+
+          <div class="campo-grupo">
+            <label for="preco">Preço (R$)</label>
+            <input id="preco" type="text" inputmode="decimal" value="34,50" class="mono">
+            <span class="nota" id="preco-mercado"></span>
+          </div>
+
+          <div class="botoes">
+            <button id="btn-comprar" type="button" class="btn btn-compra">COMPRAR</button>
+            <button id="btn-vender" type="button" class="btn btn-venda">VENDER</button>
+          </div>
+        </section>
+
+      </div>
+
+
+      <section class="cartao">
+        <h2>Feed de atualizações</h2>
+        <div id="feed" class="feed"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
