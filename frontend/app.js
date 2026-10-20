@@ -1,8 +1,4 @@
-// =====================================================================
-//  Simulador de Bolsa — lógica da aplicação (JavaScript puro)
-// =====================================================================
 
-// ---------- Estado ----------
 const MAX_LOGS = 8;
 
 const estado = {
@@ -11,13 +7,12 @@ const estado = {
     { codigo: "PETR4", preco: 35.0, base: 35.0 },
     { codigo: "VALE3", preco: 68.0, base: 68.0 },
     { codigo: "ITUB4", preco: 30.5, base: 30.5 },
-    { codigo: "MGLU3", preco: 2.1,  base: 2.1  },
+    { codigo: "MGLU3", preco: 2.1, base: 2.1 },
   ],
   carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
   logs: [],
 };
 
-// ---------- Atalhos ----------
 const $ = (id) => document.getElementById(id);
 const fmt = new Intl.NumberFormat("pt-BR", {
   minimumFractionDigits: 2,
@@ -26,7 +21,7 @@ const fmt = new Intl.NumberFormat("pt-BR", {
 const agora = () => new Date().toLocaleTimeString("pt-BR", { hour12: false });
 const achar = (codigo) => estado.ativos.find((a) => a.codigo === codigo);
 
-// ---------- Desenho da tela ----------
+// desenar as telas
 function desenharSaldo() {
   $("saldo").textContent = "R$ " + fmt(estado.saldo);
 }
@@ -59,15 +54,14 @@ function desenharFeed() {
     .join("");
 }
 
-// ---------- Feed de atualizações ----------
-// tipo: "info" | "ok" | "erro"  (as classes de cor estão no CSS)
+// atualizacoes do feed 
 function log(msg, tipo = "info") {
   estado.logs.unshift({ hora: agora(), msg, tipo });
   estado.logs.length = Math.min(estado.logs.length, MAX_LOGS);
   desenharFeed();
 }
 
-// ---------- Preços vindos do "servidor" ----------
+// Preços vindos do "servidor"
 // Ponto único de entrada de preço. Quando houver um servidor de verdade,
 // chame esta função a cada mensagem recebida.
 function aplicarPreco(codigo, novoPreco) {
@@ -92,7 +86,7 @@ function iniciarPrecos() {
   }, 3000);
 }
 
-// ---------- Envio de ordens ----------
+// envio de ordens
 function enviarOrdem(lado) {
   const codigo = $("ativo").value;
   const qtd = parseInt($("qtd").value, 10);
@@ -124,9 +118,9 @@ function enviarOrdem(lado) {
   desenharBoleta();
 }
 
-// ---------- Navegação entre telas ----------
+// Navegação entre telas 
 function entrar(nome) {
-  $("ola").textContent = `Olá, ${nome || "Arthur"}!`; // textContent: seguro contra HTML digitado
+  $("ola").textContent = `Olá, ${nome || "Arthur"}!`;
   $("tela-login").hidden = true;
   $("tela-mercado").hidden = false;
 
