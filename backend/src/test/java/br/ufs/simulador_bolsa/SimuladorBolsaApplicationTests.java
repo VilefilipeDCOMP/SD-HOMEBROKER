@@ -1,17 +1,23 @@
 package br.ufs.simulador_bolsa;
 
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Type;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.messaging.converter.JacksonJsonMessageConverter;
@@ -21,8 +27,8 @@ import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
+import br.ufs.simulador_bolsa.communication.MarketEventPublisher;
 import tools.jackson.databind.JsonNode;
-import java.lang.reflect.Type;
 
 
 @SpringBootTest(
@@ -30,6 +36,8 @@ import java.lang.reflect.Type;
         properties = "app.websocket.allowed-origins=http://localhost:5173"
 )
 class SimuladorBolsaApplicationTests {
+	@Autowired
+	private MarketEventPublisher publisher;
 
 	@Test
 	void contextLoads() {
@@ -119,11 +127,39 @@ class SimuladorBolsaApplicationTests {
 
 					first.subscribe("/topic/market", marketHandler(firstMessages));
 					second.subscribe("/topic/market", marketHandler(secondMessages));
+
+					JsonNode received = await()
+							.atMost(5, TimeUnit.SECONDS)
+							.until(() -> {
+								publisher.publish("MARKET_TEST", Map.of("sequence", 1));
+
+								return firstMessages.stream()
+										.filter(secondMessages::contains)
+										.findFirst()
+										.orElse(null);
+							}, Objects::nonNull);
+
+					assertEquals("MARKET_TEST", received.get("type").asString());
+					assertEquals(1, received.get("data").get("sequence").asInt());
+
+					first.disconnect();
+
+					publisher.publish("MARKET_TEST", Map.of("sequence", 2));
+
+					await()
+							.atMost(5, TimeUnit.SECONDS)
+							.until(() -> secondMessages.stream().anyMatch(message ->
+									message.get("data").get("sequence").asInt() == 2
+							));
+
+					assertTrue(second.isConnected());
 				} finally {
 					second.disconnect();
 				}
 			} finally {
-				first.disconnect();
+				if (first.isConnected()) {
+					first.disconnect();
+				}
 			}
 		} finally {
 			client.stop();

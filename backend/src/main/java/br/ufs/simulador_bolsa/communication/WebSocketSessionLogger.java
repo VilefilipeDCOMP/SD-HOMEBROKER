@@ -7,7 +7,6 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionConnectedEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
-import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 
 @Component 
 public class WebSocketSessionLogger {

@@ -41,3 +41,28 @@ Autenticação e autorização de assinaturas privadas estão pendentes.
 O broker mantém as inscrições em memória em uma única instância.
 Eventos não são persistidos nem recuperados após uma desconexão.
 O PostgreSQL está disponível, mas a persistência da aplicação ainda será integrada.
+
+## Demonstração de broadcast
+
+Na raiz do repositório, ative o perfil demo:
+
+```bash
+SPRING_PROFILES_ACTIVE=demo docker compose up --build -d backend
+```
+
+Esse perfil publica eventos fictícios MARKET_DEMO em /topic/market
+a cada cinco segundos.
+
+Para demonstrar:
+1. Conecte dois clientes STOMP em ws://localhost:8080/ws.
+2. Inscreva ambos em /topic/market.
+3. Compare o eventId das mensagens recebidas.
+4. Desconecte um cliente e observe a continuidade no outro.
+
+Para desativar, execute sem definir SPRING_PROFILES_ACTIVE:
+
+```bash
+docker compose up -d backend
+```
+
+O perfil demo deve permanecer desativado na execução normal.
