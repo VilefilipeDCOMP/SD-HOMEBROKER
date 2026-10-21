@@ -8,7 +8,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Repository;
 import org.springframework.stereotype.Service;
 
 
@@ -60,6 +59,7 @@ public class OrderService {
             //se entrar no if, quer dizer que a fila ta cheia ai rejeita a ordem
             if (!processor.enqueue(order)) {
                 order.reject(RejectReason.SYSTEM_BUSY);
+                ordersByClientKey.remove(key);
                 log.warn("ORDER_REJECTED orderId={} reason={}", order.orderId(), RejectReason.SYSTEM_BUSY);
             }
             //se não entrar, para aqui
@@ -70,6 +70,14 @@ public class OrderService {
     //so busca mesmo
     public Optional<Order> findById(String orderId) {
         return Optional.ofNullable(ordersById.get(orderId));
+    }
+
+    //vai devolver a ordem só se pertencer ao user
+    public Optional<Order> findByIdForUser(String orderId, String userId) {
+        if (orderId == null) {//obrigatorio, se não o ConcurrentHashMap.get(null) lançaria NullPointerException
+            return Optional.empty();
+        }
+        return findById(orderId).filter(order -> order.userId().equals(userId));
     }
 
     //busca também, mas ordena da ordem mais antiga pra mais atual de cada user buscado

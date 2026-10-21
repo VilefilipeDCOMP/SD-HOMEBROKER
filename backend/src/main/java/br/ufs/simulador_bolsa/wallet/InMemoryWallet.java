@@ -22,7 +22,7 @@ public class InMemoryWallet implements WalletPort {
     private final Map<String, Account> accounts = new ConcurrentHashMap<>();
 
     //setando quanto vai ser o dinheiro inicial
-    public InMemoryWallet(@Value("${app.wallet.initial-balance:10000.00}") BigDecimal initialBalance) {
+    public InMemoryWallet(@Value("${market.initial-balance:10000.00}") BigDecimal initialBalance) {
         this.initialBalance = initialBalance;
     }
 

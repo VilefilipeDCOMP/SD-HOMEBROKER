@@ -28,7 +28,6 @@ public final class Order {
     private volatile OrderStatus status = OrderStatus.RECEIVED;
     private volatile RejectReason rejectReason;
 
-    //
     public Order(OrderRequest request, long sequenceNumber) {
         this.orderId = UUID.randomUUID().toString();
         this.sequenceNumber = sequenceNumber;

@@ -14,8 +14,6 @@ import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.stereotype.Controller;
 
 import br.ufs.simulador_bolsa.communication.MarketEvent;
-import br.ufs.simulador_bolsa.market.Asset;
-import br.ufs.simulador_bolsa.market.AssetCatalog;
 
 //é o controller das ordens
 //o @Controller é o aviso ao spring que vai ser roteamento de msg STOMP
@@ -26,7 +24,6 @@ public class OrderController {
     private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 
     private final OrderService orderService;
-    private final AssetCatalog catalog;
     private final CurrentUserResolver users;
 
     //é por onde a ordem chega
@@ -44,12 +41,27 @@ public class OrderController {
         return event("ORDER_ACK", result.clientOrderId(), result);
     }
 
-    //por aqui é o pedido de listagem de ações
-    @MessageMapping("/assets/list")
+    //consulta o status atual de uma ordem
+    @MessageMapping("/orders/status")
     @SendToUser(destinations = "/queue/replies", broadcast = false)
-    public MarketEvent<List<Asset>> listAssets() {
-        //retorna as listas do catalogo, só
-        return event("ASSET_LIST", null, catalog.listAll());
+    public MarketEvent<OrderResult> status(OrderStatusMessage message, SimpMessageHeaderAccessor headers) {
+        String userId = users.resolve(headers);
+        String orderId = message != null ? message.orderId() : null;
+
+        return orderService.findByIdForUser(orderId, userId)
+                .map(order -> event("ORDER_STATUS", order.clientOrderId(), OrderResult.of(order)))
+                .orElseGet(() -> event("ORDER_NOT_FOUND", orderId, null));
+    }
+
+    //historico de ordens do user, ordenada das mais antigas para as mais recentes
+    @MessageMapping("/orders/mine")
+    @SendToUser(destinations = "/queue/replies", broadcast = false)
+    public MarketEvent<List<OrderResult>> myOrders(SimpMessageHeaderAccessor headers) {
+        String userId = users.resolve(headers);
+        List<OrderResult> orders = orderService.findByUser(userId).stream()
+                .map(OrderResult::of)
+                .toList();
+        return event("ORDER_HISTORY", null, orders);
     }
 
     //exception para caso o usuario tenha enviado json quebrado ou algo assim
