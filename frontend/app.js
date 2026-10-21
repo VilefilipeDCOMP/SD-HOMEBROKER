@@ -17,6 +17,7 @@ const estado = {
   carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
   logs: [],
   usuario: null,
+  modoAuth: "login", // "login" ou "register"
 };
 
 const $ = (id) => document.getElementById(id);
@@ -98,16 +99,57 @@ function aplicarPreco(codigo, novoPreco, nome) {
   log(`Preço da ${codigo} atualizou para R$ ${fmt(novoPreco)}.`);
 }
 
-// conexao websocket/stomp
+// --- autenticacao REST ---
+
+// faz login ou cadastro no backend e retorna { token, username, ... }
+async function authRest(endpoint, username, password) {
+  const res = await fetch(`${AUTH_BASE}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || `Erro ${res.status}`);
+  }
+  return data;
+}
+
+// mostra ou limpa mensagem de erro no formulário de login
+function setErroAuth(msg) {
+  let el = $("erro-auth");
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "erro-auth";
+    el.className = "nota erro";
+    $("form-login").insertBefore(el, $("btn-submit-auth"));
+  }
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+// alterna entre modo "entrar" e "criar conta" na tela de login
+function toggleModoAuth() {
+  estado.modoAuth = estado.modoAuth === "login" ? "register" : "login";
+  const isRegister = estado.modoAuth === "register";
+  $("btn-submit-auth").textContent   = isRegister ? "Criar conta"    : "Entrar no mercado";
+  $("btn-toggle-auth").textContent   = isRegister ? "Já tenho conta" : "Criar conta";
+  $("label-toggle-auth").textContent = isRegister ? "Já tem conta?"  : "Não tem conta?";
+  setErroAuth("");
+}
+
+// --- conexao websocket/stomp ---
+
 let stomp = null;
 let timerPrecos = null;
 
-function conectarStomp(nome, senha) {
+// recebe o token JWT e abre a conexão STOMP autenticada
+function conectarStomp(token) {
   stomp = new StompJs.Client({
     brokerURL: WS_URL,
     connectHeaders: {
-      login: nome,
-      passcode: senha,
+      // token JWT no header do CONNECT — backend valida aqui, nao na URL
+      Authorization: `Bearer ${token}`,
     },
     reconnectDelay: 5000,
 
@@ -161,13 +203,28 @@ function conectarStomp(nome, senha) {
         }
       });
 
-      // notificacoes de ordens
+      // confirmacao ou rejeicao de ordens
       stomp.subscribe("/user/queue/orders", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          const status = resp.status || (resp.sucesso ? "EXECUTADA" : "ERRO");
-          const tipo = status === "EXECUTADA" || status === "OK" ? "ok" : "erro";
-          log(resp.mensagem || resp.message || `Ordem: ${status}`, tipo);
+          const status = resp.status || (resp.sucesso ? "ACCEPTED" : "REJECTED");
+          const tipo   = status === "ACCEPTED" || status === "OK" ? "ok" : "erro";
+          // mapeia RejectReason do backend para mensagem amigavel em portugues
+          const razoes = {
+            INVALID_FIELDS:      "Dados da ordem inválidos.",
+            INVALID_QUANTITY:    "Quantidade inválida.",
+            INVALID_PRICE:       "Preço inválido.",
+            UNKNOWN_ASSET:       "Ativo não encontrado no mercado.",
+            INSUFFICIENT_FUNDS:  "Saldo insuficiente para esta compra.",
+            INSUFFICIENT_SHARES: "Você não possui ações suficientes para vender.",
+            SYSTEM_BUSY:         "Sistema sobrecarregado. Tente novamente.",
+            INTERNAL_ERROR:      "Erro interno do servidor.",
+          };
+          const mensagem = razoes[resp.reason]
+            || resp.mensagem
+            || resp.message
+            || `Ordem: ${status}`;
+          log(mensagem, tipo);
 
           if (resp.saldo != null) {
             estado.saldo = Number(resp.saldo);
@@ -191,7 +248,19 @@ function conectarStomp(nome, senha) {
     },
 
     onStompError: (frame) => {
-      log("Erro STOMP: " + (frame.headers?.message || "falha na conexão"), "erro");
+      const msg = frame.headers?.message || "";
+      // token expirado ou invalido — limpa e volta para o login
+      if (
+        msg.toLowerCase().includes("token") ||
+        msg.toLowerCase().includes("unauthorized") ||
+        msg.includes("401")
+      ) {
+        log("Sessão expirada. Faça login novamente.", "erro");
+        localStorage.removeItem("jwtToken");
+        sair();
+      } else {
+        log("Erro STOMP: " + (msg || "falha na conexão"), "erro");
+      }
     },
   });
 
@@ -215,10 +284,12 @@ function enviarOrdem(lado) {
     stomp.publish({
       destination: "/app/orders/create",
       body: JSON.stringify({
-        tipo: lado === "compra" ? "COMPRA" : "VENDA",
-        ticker: codigo,
-        quantidade: qtd,
-        preco_alvo: preco,
+        clientOrderId: crypto.randomUUID(),   // correlação request ↔ resposta
+        symbol: codigo,
+        side: lado === "compra" ? "BUY" : "SELL",
+        quantity: qtd,
+        price: preco,
+        // userId NÃO é enviado pelo frontend — o backend injeta via sessão STOMP
       }),
     });
     log(`Ordem de ${lado} de ${qtd} ${codigo} enviada.`);
@@ -244,29 +315,58 @@ function enviarOrdem(lado) {
   }
 }
 
-// navegacao entre telas
-function entrar(nome) {
-  const senha = $("senha").value;
-  estado.usuario = nome;
+// --- navegacao entre telas ---
 
-  $("ola").textContent = `Olá, ${nome || "Arthur"}!`;
-  $("tela-login").hidden = true;
+// tenta login REST; se o servidor nao responder, permanece na tela de login
+async function entrar(nome, senha) {
+  if (!nome) return setErroAuth("Informe um nome de usuário.");
+
+  let token = null;
+
+  try {
+    const data = await authRest("/auth/login", nome, senha);
+    token = data.token;
+    localStorage.setItem("jwtToken", token);
+    estado.usuario = data.username || nome;
+  } catch (e) {
+    // credenciais erradas ou servidor fora — permanece na tela de login
+    setErroAuth(e.message || "Erro ao conectar ao servidor.");
+    return;
+  }
+
+  // transicao para a tela de mercado
+  setErroAuth("");
+  $("tela-login").hidden  = true;
   $("tela-mercado").hidden = false;
-
+  $("ola").textContent    = `Olá, ${estado.usuario}!`;
   estado.logs = [];
   desenharSaldo();
   desenharTabela();
   desenharBoleta();
 
-  conectarStomp(nome, senha);
+  // conecta STOMP com o token JWT
+  conectarStomp(token);
 
-  // simulacao local de reserva caso o servidor nao esteja ativo
+  // simulacao local de reserva caso o STOMP nao conecte
   timerPrecos = setInterval(() => {
     if (stomp && stomp.connected) return;
-    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
+    const a   = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
     const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
     aplicarPreco(a.codigo, Math.max(0.01, novo));
   }, 3000);
+}
+
+// cadastra novo usuario e, em seguida, faz login automatico
+async function cadastrar(nome, senha) {
+  if (!nome || !senha) return setErroAuth("Informe usuário e senha para criar conta.");
+
+  try {
+    await authRest("/auth/register", nome, senha);
+    // cadastro ok — loga automaticamente
+    await entrar(nome, senha);
+  } catch (e) {
+    setErroAuth(e.message || "Erro ao criar conta.");
+  }
 }
 
 function sair() {
@@ -278,8 +378,9 @@ function sair() {
     stomp.deactivate();
     stomp = null;
   }
+  localStorage.removeItem("jwtToken");
   $("tela-mercado").hidden = true;
-  $("tela-login").hidden = false;
+  $("tela-login").hidden   = false;
 }
 
 // ligacao entre os eventos
@@ -293,9 +394,16 @@ $("ativo").addEventListener("change", () => {
 
 $("form-login").addEventListener("submit", (e) => {
   e.preventDefault();
-  entrar($("usuario").value.trim());
+  const nome  = $("usuario").value.trim();
+  const senha = $("senha").value;
+  if (estado.modoAuth === "register") {
+    cadastrar(nome, senha);
+  } else {
+    entrar(nome, senha);
+  }
 });
 
+$("btn-toggle-auth").addEventListener("click", toggleModoAuth);
 $("btn-sair").addEventListener("click", sair);
 $("btn-comprar").addEventListener("click", () => enviarOrdem("compra"));
 $("btn-vender").addEventListener("click", () => enviarOrdem("venda"));
