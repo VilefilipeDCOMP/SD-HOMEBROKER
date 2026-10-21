@@ -70,8 +70,11 @@ public class AuthService {
     }
 
     public AuthResponse login(String username, String password) {
-        if (username == null || username.isBlank() || password == null || password.isBlank()) {
-            throw new IllegalArgumentException("Usuário ou senha inválidos");
+        if (username == null || username.isBlank()) {
+            throw new IllegalArgumentException("Username não pode ser vazio");
+        }
+        if (password == null || password.isBlank()) {
+            throw new IllegalArgumentException("Senha não pode ser vazia");
         }
 
         String cleanUsername = username.trim();
