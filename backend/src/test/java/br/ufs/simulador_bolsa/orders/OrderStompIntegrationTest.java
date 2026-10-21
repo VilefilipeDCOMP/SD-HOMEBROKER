@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Type;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -12,17 +13,29 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.messaging.converter.JacksonJsonMessageConverter;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.MessageHandler;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessageType;
+import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
+import org.springframework.messaging.support.AbstractSubscribableChannel;
+import org.springframework.messaging.support.ExecutorChannelInterceptor;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import tools.jackson.databind.JsonNode;
+import br.ufs.simulador_bolsa.auth.service.AuthService;
 
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -32,6 +45,13 @@ class OrderStompIntegrationTest {
 
     @LocalServerPort
     private int port;
+
+    @Autowired
+    private AuthService authService;
+
+    @Autowired
+    @Qualifier("brokerChannel")
+    private AbstractSubscribableChannel brokerChannel;
 
     private StompFrameHandler collector(BlockingQueue<JsonNode> sink) {
         return new StompFrameHandler() {
@@ -48,18 +68,44 @@ class OrderStompIntegrationTest {
     }
 
     private StompSession connect(WebSocketStompClient client) throws Exception {
+        var auth = authService.register("m3_test_" + UUID.randomUUID(), "test-password");
+        var headers = new StompHeaders();
+        headers.add("Authorization", "Bearer " + auth.token());
         StompSession session = client.connectAsync(
-                "ws://localhost:" + port + "/ws", new StompSessionHandlerAdapter() { }
+                "ws://localhost:" + port + "/ws", new WebSocketHttpHeaders(), headers,
+                new StompSessionHandlerAdapter() { }
         ).get(5, TimeUnit.SECONDS);
-        session.setAutoReceipt(true);
         return session;
     }
 
     private void subscribeAndWait(StompSession session, String destination, BlockingQueue<JsonNode> sink)
             throws Exception {
-        CountDownLatch receipt = new CountDownLatch(1);
-        session.subscribe(destination, collector(sink)).addReceiptTask(receipt::countDown);
-        assertTrue(receipt.await(5, TimeUnit.SECONDS), "inscrição não confirmada: " + destination);
+        String subscriptionId = UUID.randomUUID().toString();
+        CountDownLatch subscribed = new CountDownLatch(1);
+        // O broker simples não envia RECEIPT; aguardamos o registro real da inscrição.
+        var interceptor = new ExecutorChannelInterceptor() {
+            @Override
+            public void afterMessageHandled(Message<?> message, MessageChannel channel,
+                    MessageHandler handler, Exception exception) {
+                var headers = message.getHeaders();
+                if (handler instanceof SimpleBrokerMessageHandler
+                        && SimpMessageHeaderAccessor.getMessageType(headers) == SimpMessageType.SUBSCRIBE
+                        && subscriptionId.equals(SimpMessageHeaderAccessor.getSubscriptionId(headers))
+                        && exception == null) {
+                    subscribed.countDown();
+                }
+            }
+        };
+        brokerChannel.addInterceptor(interceptor);
+        try {
+            var headers = new StompHeaders();
+            headers.setDestination(destination);
+            headers.setId(subscriptionId);
+            session.subscribe(headers, collector(sink));
+            assertTrue(subscribed.await(5, TimeUnit.SECONDS), "inscrição não registrada: " + destination);
+        } finally {
+            brokerChannel.removeInterceptor(interceptor);
+        }
     }
 
     private JsonNode waitFor(BlockingQueue<JsonNode> messages, Predicate<JsonNode> condition) throws Exception {
@@ -161,7 +207,7 @@ class OrderStompIntegrationTest {
                 var messages = new LinkedBlockingQueue<JsonNode>();
                 subscribeAndWait(session, "/user/queue/replies", messages);
 
-                session.send("/assets/list", Map.of());
+                session.send("/app/assets/list", Map.of());
 
                 JsonNode list = waitFor(messages, m -> "ASSET_LIST".equals(m.get("type").asString()));
                 assertEquals(4, list.get("data").size());

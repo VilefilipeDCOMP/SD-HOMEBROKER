@@ -1,7 +1,11 @@
 
 const MAX_LOGS = 8;
-const WS_URL = "ws://localhost:8080/ws";
-const AUTH_BASE = "http://localhost:8080";
+// Servidores locais sem proxy continuam acessando o backend diretamente.
+const WS_LOCAL = location.protocol === "file:" || ["5173", "5500"].includes(location.port);
+const WS_PROTOCOL = location.protocol === "https:" ? "wss:" : "ws:";
+const WS_HOST = WS_LOCAL ? `${location.hostname || "localhost"}:8086` : location.host;
+const WS_URL = `${WS_PROTOCOL}//${WS_HOST}/ws`;
+const AUTH_BASE = WS_LOCAL ? `${WS_PROTOCOL === "wss:" ? "https:" : "http:"}//${WS_HOST}` : "";
 
 const estado = {
   saldo: 10000,
@@ -304,29 +308,21 @@ function conectarStomp(token) {
           const precoFmt = d.price != null ? ` @ R$ ${fmt(d.price)}` : "";
           const qtdFmt = d.quantity != null ? ` de ${d.quantity} ${d.symbol || ""}` : "";
 
+          if (status === "RECEIVED") {
+            log(`Ordem de ${ladoDesc}${qtdFmt}${precoFmt} recebida pelo backend. Aguardando processamento.`, "info");
+            return;
+          }
+
           let mensagem;
           if (ehSucesso) {
             if (tipoEvento === "ORDER_ACK") {
               mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo backend!`;
             } else if (tipoEvento === "ORDER_UPDATED") {
-              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} confirmada pelo processador!`;
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo processador. Aguardando execução.`;
             } else {
               mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita com sucesso!`;
             }
 
-            // Atualiza saldo e carteira na tela para dar feedback imediato
-            const total = (Number(d.quantity) || 0) * (Number(d.price) || 0);
-            if (d.side === "BUY" && total > 0) {
-              estado.saldo = Math.max(0, estado.saldo - total);
-              if (d.symbol) estado.carteira[d.symbol] = (estado.carteira[d.symbol] ?? 0) + Number(d.quantity);
-              desenharSaldo();
-              desenharBoleta();
-            } else if (d.side === "SELL" && total > 0) {
-              estado.saldo += total;
-              if (d.symbol) estado.carteira[d.symbol] = Math.max(0, (estado.carteira[d.symbol] ?? 0) - Number(d.quantity));
-              desenharSaldo();
-              desenharBoleta();
-            }
           } else {
             mensagem = razoes[d.reason]
               || d.mensagem
@@ -336,12 +332,14 @@ function conectarStomp(token) {
 
           log(mensagem, tipoVisual);
 
-          if (d.saldo != null) {
-            estado.saldo = Number(d.saldo);
+          const saldo = d.saldo ?? d.balance;
+          if (saldo != null) {
+            estado.saldo = Number(saldo);
             desenharSaldo();
           }
-          if (d.carteira) {
-            Object.assign(estado.carteira, d.carteira);
+          const carteira = d.carteira ?? d.portfolio;
+          if (carteira) {
+            Object.assign(estado.carteira, carteira);
             desenharBoleta();
           }
         } catch (e) {
@@ -388,8 +386,6 @@ function enviarOrdem(lado) {
     return log("Informe uma quantidade e um preço válidos.", "erro");
   }
 
-  const total = qtd * preco;
-
   if (stomp && stomp.connected) {
     // envia pro backend processar
     stomp.publish({
@@ -405,24 +401,7 @@ function enviarOrdem(lado) {
     });
     log(`Enviando ordem de ${lado} de ${qtd} ${codigo} ao servidor...`);
   } else {
-    // se tiver sem backend, roda local
-    if (lado === "compra") {
-      if (total > estado.saldo) {
-        return log(`Saldo insuficiente para comprar ${qtd} ${codigo}.`, "erro");
-      }
-      estado.saldo -= total;
-      estado.carteira[codigo] = (estado.carteira[codigo] ?? 0) + qtd;
-      log(`Ordem de compra de ${qtd} ${codigo} enviada com sucesso!`, "ok");
-    } else {
-      if (qtd > (estado.carteira[codigo] ?? 0)) {
-        return log(`Você não possui ${qtd} ${codigo} para vender.`, "erro");
-      }
-      estado.saldo += total;
-      estado.carteira[codigo] -= qtd;
-      log(`Ordem de venda de ${qtd} ${codigo} enviada com sucesso!`, "ok");
-    }
-    desenharSaldo();
-    desenharBoleta();
+    log("Sem conexão com o servidor. A ordem não foi enviada.", "erro");
   }
 }
 

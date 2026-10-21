@@ -4,8 +4,6 @@ import java.time.Instant;
 import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
-import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
@@ -30,10 +28,6 @@ public class StompOrderNotifier implements OrderNotifier {
                 Instant.now(),
                 OrderResult.of(order));
 
-        SimpMessageHeaderAccessor headers = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
-        headers.setSessionId(order.userId());
-        headers.setLeaveMutable(true);
-
-        messagingTemplate.convertAndSendToUser(order.userId(), "/queue/orders", event, headers.getMessageHeaders());
+        messagingTemplate.convertAndSendToUser(order.userId(), "/queue/orders", event);
     }
 }

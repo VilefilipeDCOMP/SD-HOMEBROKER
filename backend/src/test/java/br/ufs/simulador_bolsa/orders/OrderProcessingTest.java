@@ -158,6 +158,7 @@ class OrderProcessingTest {
 
     @Test
     void orderIsOnlyVisibleToItsOwner() {
+        kit = new OrdersKit("1000.00");
         OrderResult result = kit.service.submit(OrdersKit.buy("u1", "c1", "PETR4", 1, "35.00"));
 
         assertTrue(kit.service.findByIdForUser(result.orderId(), "u1").isPresent());
