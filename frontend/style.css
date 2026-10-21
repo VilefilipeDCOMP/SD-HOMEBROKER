@@ -315,6 +315,13 @@ button:focus-visible {
   font-weight: 600;
 }
 
+.nome-empresa {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--suave);
+  margin-left: 6px;
+}
+
 .tabela .preco {
   font-family: var(--mono);
   font-size: 15px;

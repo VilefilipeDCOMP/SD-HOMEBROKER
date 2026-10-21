@@ -1,16 +1,18 @@
 
 const MAX_LOGS = 8;
+const WS_URL = "ws://localhost:8080/ws";
 
 const estado = {
   saldo: 10000,
   ativos: [
-    { codigo: "PETR4", preco: 35.0, base: 35.0 },
-    { codigo: "VALE3", preco: 68.0, base: 68.0 },
-    { codigo: "ITUB4", preco: 30.5, base: 30.5 },
-    { codigo: "MGLU3", preco: 2.1, base: 2.1 },
+    { codigo: "PETR4", nome: "Petrobras",     preco: 35.0,  base: 35.0  },
+    { codigo: "VALE3", nome: "Vale",           preco: 68.0,  base: 68.0  },
+    { codigo: "ITUB4", nome: "Itaú Unibanco",  preco: 30.5,  base: 30.5  },
+    { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1,   base: 2.1   },
   ],
   carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
   logs: [],
+  usuario: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -34,7 +36,7 @@ function desenharTabela() {
       const sinal = tipo === "alta" ? "+" : tipo === "baixa" ? "−" : "";
       return `
         <div class="linha">
-          <span class="codigo">${a.codigo}</span>
+          <span class="codigo">${a.codigo}<small class="nome-empresa">${a.nome ? ` · ${a.nome}` : ""}</small></span>
           <span class="preco">R$ ${fmt(a.preco)}</span>
           <span class="variacao ${tipo}">${sinal}${fmt(Math.abs(v))}%</span>
         </div>`;
@@ -44,8 +46,12 @@ function desenharTabela() {
 
 function desenharBoleta() {
   const codigo = $("ativo").value;
-  $("posicao").textContent = `Você possui: ${estado.carteira[codigo]} ${codigo}`;
-  $("preco-mercado").textContent = `Preço de mercado agora: R$ ${fmt(achar(codigo).preco)}`;
+  const pos = estado.carteira[codigo] ?? 0;
+  const ativo = achar(codigo);
+  $("posicao").textContent = `Você possui: ${pos} ${codigo}`;
+  $("preco-mercado").textContent = ativo
+    ? `Preço de mercado agora: R$ ${fmt(ativo.preco)}`
+    : "";
 }
 
 function desenharFeed() {
@@ -54,36 +60,138 @@ function desenharFeed() {
     .join("");
 }
 
-// atualizacoes do feed 
+function atualizarSelectAtivos() {
+  const sel = $("ativo");
+  const atual = sel.value;
+  sel.innerHTML = estado.ativos
+    .map((a) => `<option value="${a.codigo}">${a.codigo}${a.nome ? ` — ${a.nome}` : ""}</option>`)
+    .join("");
+  if (atual && achar(atual)) sel.value = atual;
+}
+
+// atualizacoes do feed
 function log(msg, tipo = "info") {
   estado.logs.unshift({ hora: agora(), msg, tipo });
   estado.logs.length = Math.min(estado.logs.length, MAX_LOGS);
   desenharFeed();
 }
 
-// Preços vindos do "servidor"
-// Ponto único de entrada de preço. Quando houver um servidor de verdade,
-// chame esta função a cada mensagem recebida.
-function aplicarPreco(codigo, novoPreco) {
-  const ativo = achar(codigo);
-  if (!ativo || novoPreco === ativo.preco) return;
+// ponto unico de entrada de preco
+function aplicarPreco(codigo, novoPreco, nome) {
+  let ativo = achar(codigo);
+  if (!ativo) {
+    ativo = { codigo, nome: nome || "", preco: novoPreco, base: novoPreco };
+    estado.ativos.push(ativo);
+    if (estado.carteira[codigo] === undefined) estado.carteira[codigo] = 0;
+    atualizarSelectAtivos();
+  } else if (nome && !ativo.nome) {
+    ativo.nome = nome;
+  }
+  if (novoPreco === ativo.preco) return;
   ativo.preco = novoPreco;
   desenharTabela();
   desenharBoleta();
   log(`Preço da ${codigo} atualizou para R$ ${fmt(novoPreco)}.`);
 }
 
-// Simulação local: sorteia um ativo a cada 3 segundos.
-// Para ligar num servidor real, troque este bloco por:
-//   const ws = new WebSocket("ws://localhost:8080");
-//   ws.onmessage = (e) => { const m = JSON.parse(e.data); aplicarPreco(m.codigo, m.preco); };
+// conexao websocket/stomp
+let stomp = null;
 let timerPrecos = null;
-function iniciarPrecos() {
-  timerPrecos = setInterval(() => {
-    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
-    const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
-    aplicarPreco(a.codigo, Math.max(0.01, novo));
-  }, 3000);
+
+function conectarStomp(nome, senha) {
+  stomp = new StompJs.Client({
+    brokerURL: WS_URL,
+    connectHeaders: {
+      login: nome,
+      passcode: senha,
+    },
+    reconnectDelay: 5000,
+
+    onConnect: () => {
+      log("Conectado ao servidor do mercado.");
+
+      // para a simulacao local se o server conectou
+      if (timerPrecos) {
+        clearInterval(timerPrecos);
+        timerPrecos = null;
+      }
+
+      // topico publico de mercado
+      stomp.subscribe("/topic/market", (msg) => {
+        try {
+          const evento = JSON.parse(msg.body);
+          const d = evento.data || evento;
+          const cod = d.symbol || d.ticker || d.codigo || d.assetCode;
+          const preco = d.currentPrice ?? d.preco_atual ?? d.price ?? d.preco;
+          const nome = d.name || d.nome || d.nome_empresa || "";
+          if (cod && preco != null) {
+            aplicarPreco(cod, Number(preco), nome);
+          }
+        } catch (e) {
+          console.error("Erro ao ler evento do mercado", e);
+        }
+      });
+
+      // respostas individuais (dados de saldo, carteira ou lista de ativos)
+      stomp.subscribe("/user/queue/replies", (msg) => {
+        try {
+          const resp = JSON.parse(msg.body);
+          if (resp.saldo != null) {
+            estado.saldo = Number(resp.saldo);
+            desenharSaldo();
+          }
+          if (resp.carteira) {
+            Object.assign(estado.carteira, resp.carteira);
+            desenharBoleta();
+          }
+          if (Array.isArray(resp.ativos)) {
+            resp.ativos.forEach((a) => {
+              const cod = a.symbol || a.ticker || a.codigo;
+              const p = a.currentPrice ?? a.preco_atual ?? a.preco ?? a.price;
+              const nome = a.name || a.nome || a.nome_empresa || "";
+              if (cod && p != null) aplicarPreco(cod, Number(p), nome);
+            });
+          }
+        } catch (e) {
+          console.error("Erro na resposta do servidor", e);
+        }
+      });
+
+      // notificacoes de ordens
+      stomp.subscribe("/user/queue/orders", (msg) => {
+        try {
+          const resp = JSON.parse(msg.body);
+          const status = resp.status || (resp.sucesso ? "EXECUTADA" : "ERRO");
+          const tipo = status === "EXECUTADA" || status === "OK" ? "ok" : "erro";
+          log(resp.mensagem || resp.message || `Ordem: ${status}`, tipo);
+
+          if (resp.saldo != null) {
+            estado.saldo = Number(resp.saldo);
+            desenharSaldo();
+          }
+          if (resp.carteira) {
+            Object.assign(estado.carteira, resp.carteira);
+            desenharBoleta();
+          }
+        } catch (e) {
+          console.error("Erro ao processar retorno da ordem", e);
+        }
+      });
+
+      // requisicoes iniciais
+      stomp.publish({ destination: "/app/assets/list", body: "{}" });
+    },
+
+    onDisconnect: () => {
+      log("Desconectado do servidor.", "erro");
+    },
+
+    onStompError: (frame) => {
+      log("Erro STOMP: " + (frame.headers?.message || "falha na conexão"), "erro");
+    },
+  });
+
+  stomp.activate();
 }
 
 // envio de ordens
@@ -98,53 +206,84 @@ function enviarOrdem(lado) {
 
   const total = qtd * preco;
 
-  if (lado === "compra") {
-    if (total > estado.saldo) {
-      return log(`Saldo insuficiente para comprar ${qtd} ${codigo}.`, "erro");
-    }
-    estado.saldo -= total;
-    estado.carteira[codigo] += qtd;
-    log(`Ordem de compra de ${qtd} ${codigo} enviada com sucesso!`, "ok");
+  if (stomp && stomp.connected) {
+    // envia pro backend processar
+    stomp.publish({
+      destination: "/app/orders/create",
+      body: JSON.stringify({
+        tipo: lado === "compra" ? "COMPRA" : "VENDA",
+        ticker: codigo,
+        quantidade: qtd,
+        preco_alvo: preco,
+      }),
+    });
+    log(`Ordem de ${lado} de ${qtd} ${codigo} enviada.`);
   } else {
-    if (qtd > estado.carteira[codigo]) {
-      return log(`Você não possui ${qtd} ${codigo} para vender.`, "erro");
+    // se tiver sem backend, roda local
+    if (lado === "compra") {
+      if (total > estado.saldo) {
+        return log(`Saldo insuficiente para comprar ${qtd} ${codigo}.`, "erro");
+      }
+      estado.saldo -= total;
+      estado.carteira[codigo] = (estado.carteira[codigo] ?? 0) + qtd;
+      log(`Ordem de compra de ${qtd} ${codigo} enviada com sucesso!`, "ok");
+    } else {
+      if (qtd > (estado.carteira[codigo] ?? 0)) {
+        return log(`Você não possui ${qtd} ${codigo} para vender.`, "erro");
+      }
+      estado.saldo += total;
+      estado.carteira[codigo] -= qtd;
+      log(`Ordem de venda de ${qtd} ${codigo} enviada com sucesso!`, "ok");
     }
-    estado.saldo += total;
-    estado.carteira[codigo] -= qtd;
-    log(`Ordem de venda de ${qtd} ${codigo} enviada com sucesso!`, "ok");
+    desenharSaldo();
+    desenharBoleta();
   }
-
-  desenharSaldo();
-  desenharBoleta();
 }
 
-// Navegação entre telas 
+// navegacao entre telas
 function entrar(nome) {
+  const senha = $("senha").value;
+  estado.usuario = nome;
+
   $("ola").textContent = `Olá, ${nome || "Arthur"}!`;
   $("tela-login").hidden = true;
   $("tela-mercado").hidden = false;
 
   estado.logs = [];
-  log("Conectado ao servidor do mercado.");
   desenharSaldo();
   desenharTabela();
   desenharBoleta();
-  iniciarPrecos();
+
+  conectarStomp(nome, senha);
+
+  // simulacao local de reserva caso o servidor nao esteja ativo
+  timerPrecos = setInterval(() => {
+    if (stomp && stomp.connected) return;
+    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
+    const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
+    aplicarPreco(a.codigo, Math.max(0.01, novo));
+  }, 3000);
 }
 
 function sair() {
-  clearInterval(timerPrecos);
+  if (timerPrecos) {
+    clearInterval(timerPrecos);
+    timerPrecos = null;
+  }
+  if (stomp) {
+    stomp.deactivate();
+    stomp = null;
+  }
   $("tela-mercado").hidden = true;
   $("tela-login").hidden = false;
 }
 
-// ---------- Ligação dos eventos ----------
-$("ativo").innerHTML = estado.ativos
-  .map((a) => `<option value="${a.codigo}">${a.codigo}</option>`)
-  .join("");
+// ligacao entre os eventos
+atualizarSelectAtivos();
 
 $("ativo").addEventListener("change", () => {
-  $("preco").value = fmt(achar($("ativo").value).preco); // sugere o preço atual
+  const ativo = achar($("ativo").value);
+  if (ativo) $("preco").value = fmt(ativo.preco);
   desenharBoleta();
 });
 
