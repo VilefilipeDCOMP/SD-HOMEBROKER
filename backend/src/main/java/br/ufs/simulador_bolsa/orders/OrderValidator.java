@@ -4,11 +4,14 @@ import org.springframework.stereotype.Component;
 
 import br.ufs.simulador_bolsa.market.AssetCatalog;
 
+import java.math.BigDecimal;
+
 //como o proprio nome já diz, é o validador dos pedidos neh, rs
 //acho que não tem muito o que explicar, é auto explicativo
 @Component
 public class OrderValidator {
 
+    static final BigDecimal MAX_PRICE = new BigDecimal("1000000.00");
     static final int MAX_CLIENT_ORDER_ID_LENGTH = 64;
     static final long MAX_QUANTITY = 1_000_000L;
     static final int MAX_PRICE_DECIMALS = 2;
@@ -31,7 +34,9 @@ public class OrderValidator {
             return ValidationResult.rejected(RejectReason.INVALID_QUANTITY);
         }
 
-        if (request.price() == null || request.price().signum() <= 0 || request.price().stripTrailingZeros().scale() > MAX_PRICE_DECIMALS) {
+        if (request.price() == null || request.price().signum() <= 0
+                || request.price().stripTrailingZeros().scale() > MAX_PRICE_DECIMALS
+                || request.price().compareTo(MAX_PRICE) > 0) {
             return ValidationResult.rejected(RejectReason.INVALID_PRICE);
         }
 

@@ -10,9 +10,9 @@ services:
   backend:
     build: ./backend
     ports:
-      - "8086:8086"
+      - "8086:8080"
     environment:
-      WEBSOCKET_ALLOWED_ORIGINS: ${WEBSOCKET_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:5500,http://localhost:8081}
+      WEBSOCKET_ALLOWED_ORIGINS: ${WEBSOCKET_ALLOWED_ORIGINS:-http://localhost,http://localhost:5173,http://localhost:5500,http://localhost:8081}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-simulador_bolsa}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-simulador}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}

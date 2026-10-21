@@ -207,6 +207,37 @@ button:focus-visible {
   margin-top: -8px;
 }
 
+/* alternar entre entrar / criar conta */
+.auth-toggle {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--suave);
+  margin-top: -6px;
+}
+
+.link-azul {
+  color: var(--azul);
+  font-weight: 600;
+}
+
+.link-azul:hover {
+  color: var(--azul-hover);
+}
+
+.conta-teste {
+  text-align: center;
+  padding: 10px;
+  border: 1px dashed var(--borda);
+  border-radius: 10px;
+}
+
+#erro-auth {
+  font-size: 13px;
+  margin-top: -8px;
+}
+
 /* mercado geral */
 #tela-mercado {
   min-height: 100vh;

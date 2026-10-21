@@ -10,10 +10,10 @@ const AUTH_BASE = WS_LOCAL ? `${WS_PROTOCOL === "wss:" ? "https:" : "http:"}//${
 const estado = {
   saldo: 10000,
   ativos: [
-    { codigo: "PETR4", nome: "Petrobras",     preco: 35.0,  base: 35.0  },
-    { codigo: "VALE3", nome: "Vale",           preco: 68.0,  base: 68.0  },
-    { codigo: "ITUB4", nome: "Itaú Unibanco",  preco: 30.5,  base: 30.5  },
-    { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1,   base: 2.1   },
+    { codigo: "PETR4", nome: "Petrobras", preco: 35.0, base: 35.0 },
+    { codigo: "VALE3", nome: "Vale", preco: 68.0, base: 68.0 },
+    { codigo: "ITUB4", nome: "Itaú Unibanco", preco: 30.5, base: 30.5 },
+    { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1, base: 2.1 },
   ],
   carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
   logs: [],
@@ -102,18 +102,75 @@ function aplicarPreco(codigo, novoPreco, nome) {
 
 // --- autenticacao REST ---
 
+// conta fixa para demonstracao quando o backend nao esta disponivel
+const CONTA_TESTE = { username: "teste", password: "teste123" };
+
+// erro que indica backend fora do ar (ou rota /auth ainda nao publicada)
+function erroOffline() {
+  const e = new Error("Servidor indisponível");
+  e.offline = true;
+  return e;
+}
+
 // faz login ou cadastro no backend e retorna { token, username, ... }
 async function authRest(endpoint, username, password) {
-  const res = await fetch(`${AUTH_BASE}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(`${AUTH_BASE}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw erroOffline(); // falha de rede / CORS / servidor desligado
+  }
+  if (res.status === 404) throw erroOffline(); // backend sem o modulo de auth
+  // corpo pode vir vazio (ex.: 404 sem payload), entao nao quebra se nao for JSON
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `Erro ${res.status}`);
+    // contrato do M2: { type: "AUTH_ERROR", code, message }
+    throw new Error(data.message || data.error || `Erro ${res.status}`);
   }
   return data;
+}
+
+// --- modo demonstracao (sem backend) ---
+// mesma forma de resposta do AUTH_SUCCESS do M2, mas sem token
+function contasLocais() {
+  return JSON.parse(localStorage.getItem("contasDemo") || "{}");
+}
+
+function authLocal(endpoint, username, password) {
+  const contas = contasLocais();
+  if (endpoint === "/auth/register") {
+    if (!username || !password) throw new Error("Username e senha são obrigatórios");
+    if (contas[username] || username === CONTA_TESTE.username) {
+      throw new Error("Username já está em uso");
+    }
+    contas[username] = password;
+    localStorage.setItem("contasDemo", JSON.stringify(contas));
+  } else {
+    const ok =
+      (username === CONTA_TESTE.username && password === CONTA_TESTE.password) ||
+      (contas[username] !== undefined && contas[username] === password);
+    if (!ok) throw new Error("Usuário ou senha inválidos");
+  }
+  return {
+    token: null,
+    username,
+    balance: 10000,
+    portfolio: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
+  };
+}
+
+// tenta o backend; se ele estiver fora, usa o modo demonstracao
+async function autenticar(endpoint, username, password) {
+  try {
+    return await authRest(endpoint, username, password);
+  } catch (e) {
+    if (!e.offline) throw e; // erro real do backend (senha errada, usuario existente...)
+    return authLocal(endpoint, username, password);
+  }
 }
 
 // mostra ou limpa mensagem de erro no formulário de login
@@ -133,9 +190,9 @@ function setErroAuth(msg) {
 function toggleModoAuth() {
   estado.modoAuth = estado.modoAuth === "login" ? "register" : "login";
   const isRegister = estado.modoAuth === "register";
-  $("btn-submit-auth").textContent   = isRegister ? "Criar conta"    : "Entrar no mercado";
-  $("btn-toggle-auth").textContent   = isRegister ? "Já tenho conta" : "Criar conta";
-  $("label-toggle-auth").textContent = isRegister ? "Já tem conta?"  : "Não tem conta?";
+  $("btn-submit-auth").textContent = isRegister ? "Criar conta" : "Entrar no mercado";
+  $("btn-toggle-auth").textContent = isRegister ? "Já tenho conta" : "Criar conta";
+  $("label-toggle-auth").textContent = isRegister ? "Já tem conta?" : "Não tem conta?";
   setErroAuth("");
 }
 
@@ -183,21 +240,41 @@ function conectarStomp(token) {
       stomp.subscribe("/user/queue/replies", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          if (resp.saldo != null) {
-            estado.saldo = Number(resp.saldo);
-            desenharSaldo();
-          }
-          if (resp.carteira) {
-            Object.assign(estado.carteira, resp.carteira);
-            desenharBoleta();
-          }
-          if (Array.isArray(resp.ativos)) {
-            resp.ativos.forEach((a) => {
+          const d = resp.data || resp;
+          const tipo = resp.type || "";
+
+          // 1. Catálogo oficial de ativos (ASSET_LIST)
+          const listaAtivos = Array.isArray(d) ? d : (Array.isArray(resp.ativos) ? resp.ativos : null);
+          if (listaAtivos && (tipo === "ASSET_LIST" || !tipo)) {
+            listaAtivos.forEach((a) => {
               const cod = a.symbol || a.ticker || a.codigo;
-              const p = a.currentPrice ?? a.preco_atual ?? a.preco ?? a.price;
+              const p = a.price ?? a.currentPrice ?? a.preco_atual ?? a.preco;
               const nome = a.name || a.nome || a.nome_empresa || "";
               if (cod && p != null) aplicarPreco(cod, Number(p), nome);
             });
+            log("Catálogo oficial de ativos sincronizado.", "info");
+          }
+
+          // 2. Histórico de ordens (ORDER_HISTORY)
+          if (tipo === "ORDER_HISTORY" && Array.isArray(d)) {
+            log(`Histórico sincronizado: ${d.length} ordem(ns) registrada(s).`, "info");
+          }
+
+          // 3. Status de ordem pontual (ORDER_STATUS)
+          if (tipo === "ORDER_STATUS" && d) {
+            log(`Status da ordem ${d.orderId ? d.orderId.substring(0, 8) : ""}: ${d.status}`, d.status === "ACCEPTED" ? "ok" : "info");
+          }
+
+          // 4. Atualizações de saldo ou carteira
+          const saldo = d.saldo ?? d.balance ?? resp.saldo ?? resp.balance;
+          if (saldo != null) {
+            estado.saldo = Number(saldo);
+            desenharSaldo();
+          }
+          const carteira = d.carteira || d.portfolio || resp.carteira || resp.portfolio;
+          if (carteira) {
+            Object.assign(estado.carteira, carteira);
+            desenharBoleta();
           }
         } catch (e) {
           console.error("Erro na resposta do servidor", e);
@@ -208,31 +285,61 @@ function conectarStomp(token) {
       stomp.subscribe("/user/queue/orders", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          const status = resp.status || (resp.sucesso ? "ACCEPTED" : "REJECTED");
-          const tipo   = status === "ACCEPTED" || status === "OK" ? "ok" : "erro";
+          const d = resp.data || resp;
+          const tipoEvento = resp.type || "";
+
+          const status = d.status || (d.sucesso ? "ACCEPTED" : (d.status === "OK" ? "ACCEPTED" : "REJECTED"));
+          const ehSucesso = status === "ACCEPTED" || status === "OK";
+          const tipoVisual = ehSucesso ? "ok" : "erro";
+
           // mapeia RejectReason do backend para mensagem amigavel em portugues
           const razoes = {
-            INVALID_FIELDS:      "Dados da ordem inválidos.",
-            INVALID_QUANTITY:    "Quantidade inválida.",
-            INVALID_PRICE:       "Preço inválido.",
-            UNKNOWN_ASSET:       "Ativo não encontrado no mercado.",
-            INSUFFICIENT_FUNDS:  "Saldo insuficiente para esta compra.",
+            INVALID_FIELDS: "Dados da ordem inválidos.",
+            INVALID_QUANTITY: "Quantidade inválida.",
+            INVALID_PRICE: "Preço inválido.",
+            UNKNOWN_ASSET: "Ativo não encontrado no mercado.",
+            INSUFFICIENT_FUNDS: "Saldo insuficiente para esta compra.",
             INSUFFICIENT_SHARES: "Você não possui ações suficientes para vender.",
-            SYSTEM_BUSY:         "Sistema sobrecarregado. Tente novamente.",
-            INTERNAL_ERROR:      "Erro interno do servidor.",
+            SYSTEM_BUSY: "Sistema sobrecarregado. Fila cheia.",
+            INTERNAL_ERROR: "Erro interno do servidor.",
           };
-          const mensagem = razoes[resp.reason]
-            || resp.mensagem
-            || resp.message
-            || `Ordem: ${status}`;
-          log(mensagem, tipo);
 
-          if (resp.saldo != null) {
-            estado.saldo = Number(resp.saldo);
+          const ladoDesc = d.side === "BUY" ? "Compra" : d.side === "SELL" ? "Venda" : (d.side || "Operação");
+          const precoFmt = d.price != null ? ` @ R$ ${fmt(d.price)}` : "";
+          const qtdFmt = d.quantity != null ? ` de ${d.quantity} ${d.symbol || ""}` : "";
+
+          if (status === "RECEIVED") {
+            log(`Ordem de ${ladoDesc}${qtdFmt}${precoFmt} recebida pelo backend. Aguardando processamento.`, "info");
+            return;
+          }
+
+          let mensagem;
+          if (ehSucesso) {
+            if (tipoEvento === "ORDER_ACK") {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo backend!`;
+            } else if (tipoEvento === "ORDER_UPDATED") {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo processador. Aguardando execução.`;
+            } else {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita com sucesso!`;
+            }
+
+          } else {
+            mensagem = razoes[d.reason]
+              || d.mensagem
+              || d.message
+              || `Ordem rejeitada: ${d.reason || status}`;
+          }
+
+          log(mensagem, tipoVisual);
+
+          const saldo = d.saldo ?? d.balance;
+          if (saldo != null) {
+            estado.saldo = Number(saldo);
             desenharSaldo();
           }
-          if (resp.carteira) {
-            Object.assign(estado.carteira, resp.carteira);
+          const carteira = d.carteira ?? d.portfolio;
+          if (carteira) {
+            Object.assign(estado.carteira, carteira);
             desenharBoleta();
           }
         } catch (e) {
@@ -242,6 +349,7 @@ function conectarStomp(token) {
 
       // requisicoes iniciais
       stomp.publish({ destination: "/app/assets/list", body: "{}" });
+      stomp.publish({ destination: "/app/orders/mine", body: "{}" });
     },
 
     onDisconnect: () => {
@@ -278,8 +386,6 @@ function enviarOrdem(lado) {
     return log("Informe uma quantidade e um preço válidos.", "erro");
   }
 
-  const total = qtd * preco;
-
   if (stomp && stomp.connected) {
     // envia pro backend processar
     stomp.publish({
@@ -289,46 +395,37 @@ function enviarOrdem(lado) {
         symbol: codigo,
         side: lado === "compra" ? "BUY" : "SELL",
         quantity: qtd,
-        price: preco,
+        price: preco.toFixed(2),
         // userId NÃO é enviado pelo frontend — o backend injeta via sessão STOMP
       }),
     });
-    log(`Ordem de ${lado} de ${qtd} ${codigo} enviada.`);
+    log(`Enviando ordem de ${lado} de ${qtd} ${codigo} ao servidor...`);
   } else {
-    // se tiver sem backend, roda local
-    if (lado === "compra") {
-      if (total > estado.saldo) {
-        return log(`Saldo insuficiente para comprar ${qtd} ${codigo}.`, "erro");
-      }
-      estado.saldo -= total;
-      estado.carteira[codigo] = (estado.carteira[codigo] ?? 0) + qtd;
-      log(`Ordem de compra de ${qtd} ${codigo} enviada com sucesso!`, "ok");
-    } else {
-      if (qtd > (estado.carteira[codigo] ?? 0)) {
-        return log(`Você não possui ${qtd} ${codigo} para vender.`, "erro");
-      }
-      estado.saldo += total;
-      estado.carteira[codigo] -= qtd;
-      log(`Ordem de venda de ${qtd} ${codigo} enviada com sucesso!`, "ok");
-    }
-    desenharSaldo();
-    desenharBoleta();
+    log("Sem conexão com o servidor. A ordem não foi enviada.", "erro");
   }
 }
 
 // --- navegacao entre telas ---
 
-// tenta login REST; se o servidor nao responder, permanece na tela de login
+// tenta login REST; se o servidor estiver fora, entra em modo demonstracao
 async function entrar(nome, senha) {
   if (!nome) return setErroAuth("Informe um nome de usuário.");
 
   let token = null;
 
   try {
-    const data = await authRest("/auth/login", nome, senha);
+    const data = await autenticar("/auth/login", nome, senha);
     token = data.token;
-    localStorage.setItem("jwtToken", token);
+    if (token) localStorage.setItem("jwtToken", token);
     estado.usuario = data.username || nome;
+
+    // saldo e carteira oficiais vindos do backend (contrato AUTH_SUCCESS)
+    if (data.balance != null) estado.saldo = Number(data.balance);
+    if (data.portfolio) {
+      // zera antes para nao herdar posicoes de um login anterior
+      Object.keys(estado.carteira).forEach((k) => (estado.carteira[k] = 0));
+      Object.assign(estado.carteira, data.portfolio);
+    }
   } catch (e) {
     // credenciais erradas ou servidor fora — permanece na tela de login
     setErroAuth(e.message || "Erro ao conectar ao servidor.");
@@ -337,21 +434,25 @@ async function entrar(nome, senha) {
 
   // transicao para a tela de mercado
   setErroAuth("");
-  $("tela-login").hidden  = true;
+  $("tela-login").hidden = true;
   $("tela-mercado").hidden = false;
-  $("ola").textContent    = `Olá, ${estado.usuario}!`;
+  $("ola").textContent = `Olá, ${estado.usuario}!`;
   estado.logs = [];
   desenharSaldo();
   desenharTabela();
   desenharBoleta();
 
-  // conecta STOMP com o token JWT
-  conectarStomp(token);
+  // conecta STOMP com o token JWT (sem token = modo demonstracao local)
+  if (token) {
+    conectarStomp(token);
+  } else {
+    log("Servidor indisponível — modo demonstração local.", "erro");
+  }
 
   // simulacao local de reserva caso o STOMP nao conecte
   timerPrecos = setInterval(() => {
     if (stomp && stomp.connected) return;
-    const a   = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
+    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
     const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
     aplicarPreco(a.codigo, Math.max(0.01, novo));
   }, 3000);
@@ -362,7 +463,7 @@ async function cadastrar(nome, senha) {
   if (!nome || !senha) return setErroAuth("Informe usuário e senha para criar conta.");
 
   try {
-    await authRest("/auth/register", nome, senha);
+    await autenticar("/auth/register", nome, senha);
     // cadastro ok — loga automaticamente
     await entrar(nome, senha);
   } catch (e) {
@@ -381,7 +482,7 @@ function sair() {
   }
   localStorage.removeItem("jwtToken");
   $("tela-mercado").hidden = true;
-  $("tela-login").hidden   = false;
+  $("tela-login").hidden = false;
 }
 
 // ligacao entre os eventos
@@ -395,7 +496,7 @@ $("ativo").addEventListener("change", () => {
 
 $("form-login").addEventListener("submit", (e) => {
   e.preventDefault();
-  const nome  = $("usuario").value.trim();
+  const nome = $("usuario").value.trim();
   const senha = $("senha").value;
   if (estado.modoAuth === "register") {
     cadastrar(nome, senha);

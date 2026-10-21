@@ -12,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -25,9 +26,11 @@ import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.messaging.WebSocketStompClient;
 
 import br.ufs.simulador_bolsa.communication.MarketEventPublisher;
+import br.ufs.simulador_bolsa.auth.service.AuthService;
 import tools.jackson.databind.JsonNode;
 
 
@@ -38,6 +41,16 @@ import tools.jackson.databind.JsonNode;
 class SimuladorBolsaApplicationTests {
 	@Autowired
 	private MarketEventPublisher publisher;
+
+	@Autowired
+	private AuthService authService;
+
+	private StompHeaders authenticatedHeaders() {
+		var auth = authService.register("m1_test_" + UUID.randomUUID(), "test-password");
+		var headers = new StompHeaders();
+		headers.add("Authorization", "Bearer " + auth.token());
+		return headers;
+	}
 
 	@Test
 	void contextLoads() {
@@ -86,6 +99,7 @@ class SimuladorBolsaApplicationTests {
 		try {
 			var session = client.connectAsync(
 					"ws://localhost:" + port + "/ws",
+					new WebSocketHttpHeaders(), authenticatedHeaders(),
 					new StompSessionHandlerAdapter() {}
 			).get(5, TimeUnit.SECONDS);
 
@@ -108,12 +122,14 @@ class SimuladorBolsaApplicationTests {
 		try {
 			var first = client.connectAsync(
 					"ws://localhost:" + port + "/ws",
+					new WebSocketHttpHeaders(), authenticatedHeaders(),
 					new StompSessionHandlerAdapter() {}
 			).get(5, TimeUnit.SECONDS);
 
 			try {
 				var second = client.connectAsync(
 						"ws://localhost:" + port + "/ws",
+							new WebSocketHttpHeaders(), authenticatedHeaders(),
 						new StompSessionHandlerAdapter() {}
 				).get(5, TimeUnit.SECONDS);
 
