@@ -1,6 +1,10 @@
 
 const MAX_LOGS = 8;
-const WS_URL = "ws://localhost:8080/ws";
+// Servidores locais sem proxy continuam acessando o backend diretamente.
+const WS_LOCAL = location.protocol === "file:" || ["5173", "5500"].includes(location.port);
+const WS_PROTOCOL = location.protocol === "https:" ? "wss:" : "ws:";
+const WS_HOST = WS_LOCAL ? `${location.hostname || "localhost"}:8080` : location.host;
+const WS_URL = `${WS_PROTOCOL}//${WS_HOST}/ws`;
 
 const estado = {
   saldo: 10000,
