@@ -1,15 +1,15 @@
 
 const MAX_LOGS = 8;
-const WS_URL   = "ws://localhost:8080/ws";
+const WS_URL = "ws://localhost:8080/ws";
 const AUTH_BASE = "http://localhost:8080";
 
 const estado = {
   saldo: 10000,
   ativos: [
-    { codigo: "PETR4", nome: "Petrobras",     preco: 35.0,  base: 35.0  },
-    { codigo: "VALE3", nome: "Vale",           preco: 68.0,  base: 68.0  },
-    { codigo: "ITUB4", nome: "Itaú Unibanco",  preco: 30.5,  base: 30.5  },
-    { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1,   base: 2.1   },
+    { codigo: "PETR4", nome: "Petrobras", preco: 35.0, base: 35.0 },
+    { codigo: "VALE3", nome: "Vale", preco: 68.0, base: 68.0 },
+    { codigo: "ITUB4", nome: "Itaú Unibanco", preco: 30.5, base: 30.5 },
+    { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1, base: 2.1 },
   ],
   carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
   logs: [],
@@ -186,9 +186,9 @@ function setErroAuth(msg) {
 function toggleModoAuth() {
   estado.modoAuth = estado.modoAuth === "login" ? "register" : "login";
   const isRegister = estado.modoAuth === "register";
-  $("btn-submit-auth").textContent   = isRegister ? "Criar conta"    : "Entrar no mercado";
-  $("btn-toggle-auth").textContent   = isRegister ? "Já tenho conta" : "Criar conta";
-  $("label-toggle-auth").textContent = isRegister ? "Já tem conta?"  : "Não tem conta?";
+  $("btn-submit-auth").textContent = isRegister ? "Criar conta" : "Entrar no mercado";
+  $("btn-toggle-auth").textContent = isRegister ? "Já tenho conta" : "Criar conta";
+  $("label-toggle-auth").textContent = isRegister ? "Já tem conta?" : "Não tem conta?";
   setErroAuth("");
 }
 
@@ -236,23 +236,41 @@ function conectarStomp(token) {
       stomp.subscribe("/user/queue/replies", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          const saldo = resp.saldo ?? resp.balance;
+          const d = resp.data || resp;
+          const tipo = resp.type || "";
+
+          // 1. Catálogo oficial de ativos (ASSET_LIST)
+          const listaAtivos = Array.isArray(d) ? d : (Array.isArray(resp.ativos) ? resp.ativos : null);
+          if (listaAtivos && (tipo === "ASSET_LIST" || !tipo)) {
+            listaAtivos.forEach((a) => {
+              const cod = a.symbol || a.ticker || a.codigo;
+              const p = a.price ?? a.currentPrice ?? a.preco_atual ?? a.preco;
+              const nome = a.name || a.nome || a.nome_empresa || "";
+              if (cod && p != null) aplicarPreco(cod, Number(p), nome);
+            });
+            log("Catálogo oficial de ativos sincronizado.", "info");
+          }
+
+          // 2. Histórico de ordens (ORDER_HISTORY)
+          if (tipo === "ORDER_HISTORY" && Array.isArray(d)) {
+            log(`Histórico sincronizado: ${d.length} ordem(ns) registrada(s).`, "info");
+          }
+
+          // 3. Status de ordem pontual (ORDER_STATUS)
+          if (tipo === "ORDER_STATUS" && d) {
+            log(`Status da ordem ${d.orderId ? d.orderId.substring(0, 8) : ""}: ${d.status}`, d.status === "ACCEPTED" ? "ok" : "info");
+          }
+
+          // 4. Atualizações de saldo ou carteira
+          const saldo = d.saldo ?? d.balance ?? resp.saldo ?? resp.balance;
           if (saldo != null) {
             estado.saldo = Number(saldo);
             desenharSaldo();
           }
-          const carteira = resp.carteira || resp.portfolio;
+          const carteira = d.carteira || d.portfolio || resp.carteira || resp.portfolio;
           if (carteira) {
             Object.assign(estado.carteira, carteira);
             desenharBoleta();
-          }
-          if (Array.isArray(resp.ativos)) {
-            resp.ativos.forEach((a) => {
-              const cod = a.symbol || a.ticker || a.codigo;
-              const p = a.currentPrice ?? a.preco_atual ?? a.preco ?? a.price;
-              const nome = a.name || a.nome || a.nome_empresa || "";
-              if (cod && p != null) aplicarPreco(cod, Number(p), nome);
-            });
           }
         } catch (e) {
           console.error("Erro na resposta do servidor", e);
@@ -263,31 +281,67 @@ function conectarStomp(token) {
       stomp.subscribe("/user/queue/orders", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          const status = resp.status || (resp.sucesso ? "ACCEPTED" : "REJECTED");
-          const tipo   = status === "ACCEPTED" || status === "OK" ? "ok" : "erro";
+          const d = resp.data || resp;
+          const tipoEvento = resp.type || "";
+
+          const status = d.status || (d.sucesso ? "ACCEPTED" : (d.status === "OK" ? "ACCEPTED" : "REJECTED"));
+          const ehSucesso = status === "ACCEPTED" || status === "OK";
+          const tipoVisual = ehSucesso ? "ok" : "erro";
+
           // mapeia RejectReason do backend para mensagem amigavel em portugues
           const razoes = {
-            INVALID_FIELDS:      "Dados da ordem inválidos.",
-            INVALID_QUANTITY:    "Quantidade inválida.",
-            INVALID_PRICE:       "Preço inválido.",
-            UNKNOWN_ASSET:       "Ativo não encontrado no mercado.",
-            INSUFFICIENT_FUNDS:  "Saldo insuficiente para esta compra.",
+            INVALID_FIELDS: "Dados da ordem inválidos.",
+            INVALID_QUANTITY: "Quantidade inválida.",
+            INVALID_PRICE: "Preço inválido.",
+            UNKNOWN_ASSET: "Ativo não encontrado no mercado.",
+            INSUFFICIENT_FUNDS: "Saldo insuficiente para esta compra.",
             INSUFFICIENT_SHARES: "Você não possui ações suficientes para vender.",
-            SYSTEM_BUSY:         "Sistema sobrecarregado. Tente novamente.",
-            INTERNAL_ERROR:      "Erro interno do servidor.",
+            SYSTEM_BUSY: "Sistema sobrecarregado. Fila cheia.",
+            INTERNAL_ERROR: "Erro interno do servidor.",
           };
-          const mensagem = razoes[resp.reason]
-            || resp.mensagem
-            || resp.message
-            || `Ordem: ${status}`;
-          log(mensagem, tipo);
 
-          if (resp.saldo != null) {
-            estado.saldo = Number(resp.saldo);
+          const ladoDesc = d.side === "BUY" ? "Compra" : d.side === "SELL" ? "Venda" : (d.side || "Operação");
+          const precoFmt = d.price != null ? ` @ R$ ${fmt(d.price)}` : "";
+          const qtdFmt = d.quantity != null ? ` de ${d.quantity} ${d.symbol || ""}` : "";
+
+          let mensagem;
+          if (ehSucesso) {
+            if (tipoEvento === "ORDER_ACK") {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo backend!`;
+            } else if (tipoEvento === "ORDER_UPDATED") {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} confirmada pelo processador!`;
+            } else {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita com sucesso!`;
+            }
+
+            // Atualiza saldo e carteira na tela para dar feedback imediato
+            const total = (Number(d.quantity) || 0) * (Number(d.price) || 0);
+            if (d.side === "BUY" && total > 0) {
+              estado.saldo = Math.max(0, estado.saldo - total);
+              if (d.symbol) estado.carteira[d.symbol] = (estado.carteira[d.symbol] ?? 0) + Number(d.quantity);
+              desenharSaldo();
+              desenharBoleta();
+            } else if (d.side === "SELL" && total > 0) {
+              estado.saldo += total;
+              if (d.symbol) estado.carteira[d.symbol] = Math.max(0, (estado.carteira[d.symbol] ?? 0) - Number(d.quantity));
+              desenharSaldo();
+              desenharBoleta();
+            }
+          } else {
+            mensagem = razoes[d.reason]
+              || d.mensagem
+              || d.message
+              || `Ordem rejeitada: ${d.reason || status}`;
+          }
+
+          log(mensagem, tipoVisual);
+
+          if (d.saldo != null) {
+            estado.saldo = Number(d.saldo);
             desenharSaldo();
           }
-          if (resp.carteira) {
-            Object.assign(estado.carteira, resp.carteira);
+          if (d.carteira) {
+            Object.assign(estado.carteira, d.carteira);
             desenharBoleta();
           }
         } catch (e) {
@@ -297,6 +351,7 @@ function conectarStomp(token) {
 
       // requisicoes iniciais
       stomp.publish({ destination: "/app/assets/list", body: "{}" });
+      stomp.publish({ destination: "/app/orders/mine", body: "{}" });
     },
 
     onDisconnect: () => {
@@ -344,11 +399,11 @@ function enviarOrdem(lado) {
         symbol: codigo,
         side: lado === "compra" ? "BUY" : "SELL",
         quantity: qtd,
-        price: preco,
+        price: preco.toFixed(2),
         // userId NÃO é enviado pelo frontend — o backend injeta via sessão STOMP
       }),
     });
-    log(`Ordem de ${lado} de ${qtd} ${codigo} enviada.`);
+    log(`Enviando ordem de ${lado} de ${qtd} ${codigo} ao servidor...`);
   } else {
     // se tiver sem backend, roda local
     if (lado === "compra") {
@@ -400,9 +455,9 @@ async function entrar(nome, senha) {
 
   // transicao para a tela de mercado
   setErroAuth("");
-  $("tela-login").hidden  = true;
+  $("tela-login").hidden = true;
   $("tela-mercado").hidden = false;
-  $("ola").textContent    = `Olá, ${estado.usuario}!`;
+  $("ola").textContent = `Olá, ${estado.usuario}!`;
   estado.logs = [];
   desenharSaldo();
   desenharTabela();
@@ -418,7 +473,7 @@ async function entrar(nome, senha) {
   // simulacao local de reserva caso o STOMP nao conecte
   timerPrecos = setInterval(() => {
     if (stomp && stomp.connected) return;
-    const a   = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
+    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
     const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
     aplicarPreco(a.codigo, Math.max(0.01, novo));
   }, 3000);
@@ -448,7 +503,7 @@ function sair() {
   }
   localStorage.removeItem("jwtToken");
   $("tela-mercado").hidden = true;
-  $("tela-login").hidden   = false;
+  $("tela-login").hidden = false;
 }
 
 // ligacao entre os eventos
@@ -462,7 +517,7 @@ $("ativo").addEventListener("change", () => {
 
 $("form-login").addEventListener("submit", (e) => {
   e.preventDefault();
-  const nome  = $("usuario").value.trim();
+  const nome = $("usuario").value.trim();
   const senha = $("senha").value;
   if (estado.modoAuth === "register") {
     cadastrar(nome, senha);
