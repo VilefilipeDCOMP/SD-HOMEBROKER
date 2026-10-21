@@ -98,18 +98,75 @@ function aplicarPreco(codigo, novoPreco, nome) {
 
 // --- autenticacao REST ---
 
+// conta fixa para demonstracao quando o backend nao esta disponivel
+const CONTA_TESTE = { username: "teste", password: "teste123" };
+
+// erro que indica backend fora do ar (ou rota /auth ainda nao publicada)
+function erroOffline() {
+  const e = new Error("Servidor indisponível");
+  e.offline = true;
+  return e;
+}
+
 // faz login ou cadastro no backend e retorna { token, username, ... }
 async function authRest(endpoint, username, password) {
-  const res = await fetch(`${AUTH_BASE}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-  const data = await res.json();
+  let res;
+  try {
+    res = await fetch(`${AUTH_BASE}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw erroOffline(); // falha de rede / CORS / servidor desligado
+  }
+  if (res.status === 404) throw erroOffline(); // backend sem o modulo de auth
+  // corpo pode vir vazio (ex.: 404 sem payload), entao nao quebra se nao for JSON
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `Erro ${res.status}`);
+    // contrato do M2: { type: "AUTH_ERROR", code, message }
+    throw new Error(data.message || data.error || `Erro ${res.status}`);
   }
   return data;
+}
+
+// --- modo demonstracao (sem backend) ---
+// mesma forma de resposta do AUTH_SUCCESS do M2, mas sem token
+function contasLocais() {
+  return JSON.parse(localStorage.getItem("contasDemo") || "{}");
+}
+
+function authLocal(endpoint, username, password) {
+  const contas = contasLocais();
+  if (endpoint === "/auth/register") {
+    if (!username || !password) throw new Error("Username e senha são obrigatórios");
+    if (contas[username] || username === CONTA_TESTE.username) {
+      throw new Error("Username já está em uso");
+    }
+    contas[username] = password;
+    localStorage.setItem("contasDemo", JSON.stringify(contas));
+  } else {
+    const ok =
+      (username === CONTA_TESTE.username && password === CONTA_TESTE.password) ||
+      (contas[username] !== undefined && contas[username] === password);
+    if (!ok) throw new Error("Usuário ou senha inválidos");
+  }
+  return {
+    token: null,
+    username,
+    balance: 10000,
+    portfolio: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
+  };
+}
+
+// tenta o backend; se ele estiver fora, usa o modo demonstracao
+async function autenticar(endpoint, username, password) {
+  try {
+    return await authRest(endpoint, username, password);
+  } catch (e) {
+    if (!e.offline) throw e; // erro real do backend (senha errada, usuario existente...)
+    return authLocal(endpoint, username, password);
+  }
 }
 
 // mostra ou limpa mensagem de erro no formulário de login
@@ -179,12 +236,14 @@ function conectarStomp(token) {
       stomp.subscribe("/user/queue/replies", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          if (resp.saldo != null) {
-            estado.saldo = Number(resp.saldo);
+          const saldo = resp.saldo ?? resp.balance;
+          if (saldo != null) {
+            estado.saldo = Number(saldo);
             desenharSaldo();
           }
-          if (resp.carteira) {
-            Object.assign(estado.carteira, resp.carteira);
+          const carteira = resp.carteira || resp.portfolio;
+          if (carteira) {
+            Object.assign(estado.carteira, carteira);
             desenharBoleta();
           }
           if (Array.isArray(resp.ativos)) {
@@ -314,17 +373,25 @@ function enviarOrdem(lado) {
 
 // --- navegacao entre telas ---
 
-// tenta login REST; se o servidor nao responder, permanece na tela de login
+// tenta login REST; se o servidor estiver fora, entra em modo demonstracao
 async function entrar(nome, senha) {
   if (!nome) return setErroAuth("Informe um nome de usuário.");
 
   let token = null;
 
   try {
-    const data = await authRest("/auth/login", nome, senha);
+    const data = await autenticar("/auth/login", nome, senha);
     token = data.token;
-    localStorage.setItem("jwtToken", token);
+    if (token) localStorage.setItem("jwtToken", token);
     estado.usuario = data.username || nome;
+
+    // saldo e carteira oficiais vindos do backend (contrato AUTH_SUCCESS)
+    if (data.balance != null) estado.saldo = Number(data.balance);
+    if (data.portfolio) {
+      // zera antes para nao herdar posicoes de um login anterior
+      Object.keys(estado.carteira).forEach((k) => (estado.carteira[k] = 0));
+      Object.assign(estado.carteira, data.portfolio);
+    }
   } catch (e) {
     // credenciais erradas ou servidor fora — permanece na tela de login
     setErroAuth(e.message || "Erro ao conectar ao servidor.");
@@ -341,8 +408,12 @@ async function entrar(nome, senha) {
   desenharTabela();
   desenharBoleta();
 
-  // conecta STOMP com o token JWT
-  conectarStomp(token);
+  // conecta STOMP com o token JWT (sem token = modo demonstracao local)
+  if (token) {
+    conectarStomp(token);
+  } else {
+    log("Servidor indisponível — modo demonstração local.", "erro");
+  }
 
   // simulacao local de reserva caso o STOMP nao conecte
   timerPrecos = setInterval(() => {
@@ -358,7 +429,7 @@ async function cadastrar(nome, senha) {
   if (!nome || !senha) return setErroAuth("Informe usuário e senha para criar conta.");
 
   try {
-    await authRest("/auth/register", nome, senha);
+    await autenticar("/auth/register", nome, senha);
     // cadastro ok — loga automaticamente
     await entrar(nome, senha);
   } catch (e) {
