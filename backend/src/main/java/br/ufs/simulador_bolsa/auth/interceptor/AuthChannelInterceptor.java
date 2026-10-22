@@ -5,6 +5,7 @@ import br.ufs.simulador_bolsa.auth.repository.UserRepository;
 import br.ufs.simulador_bolsa.auth.service.JwtService;
 import br.ufs.simulador_bolsa.auth.service.SessionRegistry;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -13,20 +14,13 @@ import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.stereotype.Component;
 
+@RequiredArgsConstructor
 @Component
 public class AuthChannelInterceptor implements ChannelInterceptor {
 
     private final JwtService jwtService;
     private final UserRepository userRepository;
     private final SessionRegistry sessionRegistry;
-
-    public AuthChannelInterceptor(JwtService jwtService,
-                                  UserRepository userRepository,
-                                  SessionRegistry sessionRegistry) {
-        this.jwtService = jwtService;
-        this.userRepository = userRepository;
-        this.sessionRegistry = sessionRegistry;
-    }
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {

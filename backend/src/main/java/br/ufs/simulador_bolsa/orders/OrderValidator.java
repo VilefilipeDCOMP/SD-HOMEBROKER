@@ -1,5 +1,6 @@
 package br.ufs.simulador_bolsa.orders;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import br.ufs.simulador_bolsa.market.AssetCatalog;
@@ -8,6 +9,7 @@ import java.math.BigDecimal;
 
 //como o proprio nome já diz, é o validador dos pedidos neh, rs
 //acho que não tem muito o que explicar, é auto explicativo
+@RequiredArgsConstructor
 @Component
 public class OrderValidator {
 
@@ -17,10 +19,6 @@ public class OrderValidator {
     static final int MAX_PRICE_DECIMALS = 2;
 
     private final AssetCatalog catalog;
-
-    public OrderValidator(AssetCatalog catalog) {
-        this.catalog = catalog;
-    }
 
     public ValidationResult validate(OrderRequest request) {
         if (request == null || isBlank(request.userId()) || isBlank(request.clientOrderId())

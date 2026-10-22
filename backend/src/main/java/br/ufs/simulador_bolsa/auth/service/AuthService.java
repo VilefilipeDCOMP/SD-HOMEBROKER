@@ -3,6 +3,7 @@ package br.ufs.simulador_bolsa.auth.service;
 import java.math.BigDecimal;
 import java.util.Map;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -12,6 +13,7 @@ import br.ufs.simulador_bolsa.auth.entity.User;
 import br.ufs.simulador_bolsa.auth.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
 
+@RequiredArgsConstructor
 @Slf4j
 @Service
 public class AuthService {
@@ -29,11 +31,6 @@ public class AuthService {
 
     @Value("${market.initial-balance:10000.00}")
     private BigDecimal initialBalance;
-
-    public AuthService(UserRepository userRepository, JwtService jwtService) {
-        this.userRepository = userRepository;
-        this.jwtService = jwtService;
-    }
 
     public AuthResponse register(String username, String password) {
         if (username == null || username.isBlank()) {

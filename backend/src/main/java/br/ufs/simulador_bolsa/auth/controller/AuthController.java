@@ -1,5 +1,6 @@
 package br.ufs.simulador_bolsa.auth.controller;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -15,16 +16,13 @@ import br.ufs.simulador_bolsa.auth.dto.ErrorResponse;
 import br.ufs.simulador_bolsa.auth.service.AuthService;
 
 
+@RequiredArgsConstructor
 @RestController
 @RequestMapping("/auth")
 @CrossOrigin(origins = "*")
 public class AuthController {
 
     private final AuthService authService;
-
-    public AuthController(AuthService authService) {
-        this.authService = authService;
-    }
 
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@RequestBody AuthRequest request) {

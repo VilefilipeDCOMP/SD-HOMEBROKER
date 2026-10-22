@@ -3,17 +3,15 @@ package br.ufs.simulador_bolsa.communication;
 import java.time.Instant;
 import java.util.UUID;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
+@RequiredArgsConstructor
 @Service
 public class MarketEventPublisher {
 
     private final SimpMessagingTemplate messagingTemplate;
-
-    public MarketEventPublisher(SimpMessagingTemplate messagingTemplate) {
-        this.messagingTemplate = messagingTemplate;
-    }
 
     public <T> void publish(String type, T data) {
         if (type == null || type.isBlank()) {
