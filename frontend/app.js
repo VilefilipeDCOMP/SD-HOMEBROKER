@@ -1,6 +1,6 @@
+const MAX_LOGS = 25;
 
-const MAX_LOGS = 8;
-// Servidores locais sem proxy continuam acessando o backend diretamente.
+// servidores locais sem proxy continuam acessando o backend diretamente
 const WS_LOCAL = location.protocol === "file:" || ["5173", "5500"].includes(location.port);
 const WS_PROTOCOL = location.protocol === "https:" ? "wss:" : "ws:";
 const WS_HOST = WS_LOCAL ? `${location.hostname || "localhost"}:8086` : location.host;
@@ -9,13 +9,24 @@ const AUTH_BASE = WS_LOCAL ? `${WS_PROTOCOL === "wss:" ? "https:" : "http:"}//${
 
 const estado = {
   saldo: 10000,
+  saldoReservado: 0,
   ativos: [
     { codigo: "PETR4", nome: "Petrobras", preco: 35.0, base: 35.0 },
     { codigo: "VALE3", nome: "Vale", preco: 68.0, base: 68.0 },
     { codigo: "ITUB4", nome: "Itaú Unibanco", preco: 30.5, base: 30.5 },
     { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1, base: 2.1 },
   ],
+  // mapa simples codigo -> quantidade total mantido para compatibilidade com a parte 1
   carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
+  // detalhe por ativo vindo do servidor (quantidade total, reservada e preco medio)
+  posicoes: {
+    PETR4: { quantidade: 0, reservada: 0, precoMedio: 0 },
+    VALE3: { quantidade: 0, reservada: 0, precoMedio: 0 },
+    ITUB4: { quantidade: 0, reservada: 0, precoMedio: 0 },
+    MGLU3: { quantidade: 0, reservada: 0, precoMedio: 0 },
+  },
+  abaAtiva: "ordens",
+  ativoSelecionado: "PETR4",
   logs: [],
   usuario: null,
   modoAuth: "login", // "login" ou "register"
@@ -26,69 +37,225 @@ const fmt = new Intl.NumberFormat("pt-BR", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 }).format;
+const fmtInt = new Intl.NumberFormat("pt-BR", {
+  maximumFractionDigits: 0,
+}).format;
 const agora = () => new Date().toLocaleTimeString("pt-BR", { hour12: false });
 const achar = (codigo) => estado.ativos.find((a) => a.codigo === codigo);
 
-// desenar as telas
-function desenharSaldo() {
-  $("saldo").textContent = "R$ " + fmt(estado.saldo);
+// helpers defensivos para rodar igual no navegador e nos testes em node:vm
+function esc(valor) {
+  return String(valor ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
-function desenharTabela() {
-  $("tabela").innerHTML = estado.ativos
-    .map((a) => {
-      const v = ((a.preco - a.base) / a.base) * 100;
-      const tipo = v > 0.005 ? "alta" : v < -0.005 ? "baixa" : "neutro";
-      const sinal = tipo === "alta" ? "+" : tipo === "baixa" ? "−" : "";
-      return `
-        <div class="linha">
-          <span class="codigo">${a.codigo}<small class="nome-empresa">${a.nome ? ` · ${a.nome}` : ""}</small></span>
-          <span class="preco">R$ ${fmt(a.preco)}</span>
-          <span class="variacao ${tipo}">${sinal}${fmt(Math.abs(v))}%</span>
-        </div>`;
-    })
-    .join("");
+function setTexto(id, texto) {
+  const el = $(id);
+  if (el) el.textContent = texto;
 }
 
-function desenharBoleta() {
-  const codigo = $("ativo").value;
-  const pos = estado.carteira[codigo] ?? 0;
+function setHtml(id, html) {
+  const el = $(id);
+  if (el) el.innerHTML = html;
+}
+
+function setHidden(id, oculto) {
+  const el = $(id);
+  if (el) el.hidden = Boolean(oculto);
+}
+
+function setClasse(id, classe) {
+  const el = $(id);
+  if (el) el.className = classe;
+}
+
+function gerarUuid() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `cid-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function storageGet(chave) {
+  return typeof localStorage !== "undefined" ? localStorage.getItem(chave) : null;
+}
+
+function storageSet(chave, valor) {
+  if (typeof localStorage !== "undefined") localStorage.setItem(chave, valor);
+}
+
+function storageRemove(chave) {
+  if (typeof localStorage !== "undefined") localStorage.removeItem(chave);
+}
+
+function garantirPosicao(codigo) {
+  if (!estado.posicoes[codigo]) {
+    estado.posicoes[codigo] = { quantidade: 0, reservada: 0, precoMedio: 0 };
+  }
+  if (estado.carteira[codigo] === undefined) {
+    estado.carteira[codigo] = estado.posicoes[codigo].quantidade;
+  }
+  return estado.posicoes[codigo];
+}
+
+// --- calculos financeiros derivados (somente exibicao; servidor e fonte de verdade) ---
+
+function arredondarMoeda(valor) {
+  return Math.round(Number(valor || 0) * 100) / 100;
+}
+
+function calcularVariacao(ativo) {
+  if (!ativo || !(ativo.base > 0)) return 0;
+  return ((ativo.preco - ativo.base) / ativo.base) * 100;
+}
+
+function calcularPosicao(codigo) {
+  const pos = estado.posicoes[codigo] || { quantidade: estado.carteira[codigo] || 0, reservada: 0, precoMedio: 0 };
   const ativo = achar(codigo);
-  $("posicao").textContent = `Você possui: ${pos} ${codigo}`;
-  $("preco-mercado").textContent = ativo
-    ? `Preço de mercado agora: R$ ${fmt(ativo.preco)}`
-    : "";
+  const quantidade = Number(pos.quantidade ?? estado.carteira[codigo] ?? 0);
+  const reservada = Number(pos.reservada ?? 0);
+  const precoMedio = Number(pos.precoMedio ?? 0);
+  const precoAtual = ativo ? Number(ativo.preco) : precoMedio;
+  const valorAtual = arredondarMoeda(quantidade * precoAtual);
+  const custoTotal = arredondarMoeda(quantidade * precoMedio);
+  const lucroPrejuizo = quantidade > 0 && precoMedio > 0 ? arredondarMoeda(valorAtual - custoTotal) : 0;
+  const lucroPercentual = custoTotal > 0 ? (lucroPrejuizo / custoTotal) * 100 : 0;
+
+  return {
+    codigo,
+    nome: ativo?.nome || "",
+    quantidade,
+    reservada,
+    precoMedio,
+    precoAtual,
+    valorAtual,
+    custoTotal,
+    lucroPrejuizo,
+    lucroPercentual,
+  };
 }
 
-function desenharFeed() {
-  $("feed").innerHTML = estado.logs
-    .map((l) => `<div class="feed-item"><time>${l.hora}</time><span class="${l.tipo}">${l.msg}</span></div>`)
-    .join("");
+function calcularResumoCarteira() {
+  const codigos = new Set([
+    ...Object.keys(estado.carteira),
+    ...Object.keys(estado.posicoes),
+  ]);
+
+  let valorEmAtivos = 0;
+  let custoTotal = 0;
+  let lucroPrejuizoTotal = 0;
+  const posicoesAtivas = [];
+
+  for (const codigo of codigos) {
+    const item = calcularPosicao(codigo);
+    if (item.quantidade > 0 || item.reservada > 0) {
+      valorEmAtivos = arredondarMoeda(valorEmAtivos + item.valorAtual);
+      custoTotal = arredondarMoeda(custoTotal + item.custoTotal);
+      lucroPrejuizoTotal = arredondarMoeda(lucroPrejuizoTotal + item.lucroPrejuizo);
+      posicoesAtivas.push(item);
+    }
+  }
+
+  posicoesAtivas.sort((a, b) => a.codigo.localeCompare(b.codigo));
+
+  const saldoDisponivel = arredondarMoeda(estado.saldo);
+  const saldoReservado = arredondarMoeda(estado.saldoReservado);
+  const patrimonioTotal = arredondarMoeda(saldoDisponivel + saldoReservado + valorEmAtivos);
+  const lucroPercentualTotal = custoTotal > 0 ? (lucroPrejuizoTotal / custoTotal) * 100 : 0;
+
+  return {
+    saldoDisponivel,
+    saldoReservado,
+    valorEmAtivos,
+    patrimonioTotal,
+    custoTotal,
+    lucroPrejuizoTotal,
+    lucroPercentualTotal,
+    posicoesAtivas,
+  };
 }
 
-function atualizarSelectAtivos() {
-  const sel = $("ativo");
-  const atual = sel.value;
-  sel.innerHTML = estado.ativos
-    .map((a) => `<option value="${a.codigo}">${a.codigo}${a.nome ? ` — ${a.nome}` : ""}</option>`)
-    .join("");
-  if (atual && achar(atual)) sel.value = atual;
+// --- aplicacao de dados vindos do servidor ---
+
+function aplicarCarteiraMapa(mapa) {
+  if (!mapa || typeof mapa !== "object") return;
+  for (const [codigo, valor] of Object.entries(mapa)) {
+    const pos = garantirPosicao(codigo);
+    if (typeof valor === "object" && valor !== null) {
+      const qtd = Number(valor.quantity ?? valor.quantidade ?? 0);
+      const res = Number(valor.reservedQuantity ?? valor.quantidadeReservada ?? valor.reservada ?? 0);
+      const pm = Number(valor.averagePrice ?? valor.precoMedio ?? valor.preco_medio ?? pos.precoMedio ?? 0);
+      pos.quantidade = qtd;
+      pos.reservada = res;
+      pos.precoMedio = pm;
+      estado.carteira[codigo] = qtd;
+    } else {
+      const qtd = Number(valor || 0);
+      pos.quantidade = qtd;
+      estado.carteira[codigo] = qtd;
+    }
+  }
 }
 
-// atualizacoes do feed
-function log(msg, tipo = "info") {
-  estado.logs.unshift({ hora: agora(), msg, tipo });
-  estado.logs.length = Math.min(estado.logs.length, MAX_LOGS);
-  desenharFeed();
+function aplicarSnapshotCarteira(dados, substituirTudo = false) {
+  if (!dados || typeof dados !== "object") return;
+
+  const saldo = dados.saldo ?? dados.balance ?? dados.availableBalance;
+  if (saldo != null) {
+    estado.saldo = Number(saldo);
+  }
+
+  const reservado = dados.saldoReservado ?? dados.reservedBalance ?? dados.blockedBalance;
+  if (reservado != null) {
+    estado.saldoReservado = Number(reservado);
+  }
+
+  const listaPosicoes = dados.positions || dados.posicoes || dados.assets;
+  const mapaCarteira = dados.carteira || dados.portfolio;
+
+  if (substituirTudo && (Array.isArray(listaPosicoes) || mapaCarteira)) {
+    Object.keys(estado.carteira).forEach((k) => (estado.carteira[k] = 0));
+    Object.keys(estado.posicoes).forEach((k) => {
+      estado.posicoes[k] = { quantidade: 0, reservada: 0, precoMedio: 0 };
+    });
+  }
+
+  if (Array.isArray(listaPosicoes)) {
+    listaPosicoes.forEach((p) => {
+      const codigo = p.symbol || p.ticker || p.codigo || p.assetCode;
+      if (!codigo) return;
+      const pos = garantirPosicao(codigo);
+      const disponivel = p.availableQuantity != null ? Number(p.availableQuantity) : null;
+      const reservada = Number(p.reservedQuantity ?? p.quantidadeReservada ?? p.reservada ?? 0);
+      const total = p.quantity != null
+        ? Number(p.quantity)
+        : (p.quantidade != null ? Number(p.quantidade) : (disponivel != null ? disponivel + reservada : 0));
+      const precoMedio = Number(p.averagePrice ?? p.precoMedio ?? p.preco_medio ?? 0);
+
+      pos.quantidade = total;
+      pos.reservada = reservada;
+      pos.precoMedio = precoMedio;
+      estado.carteira[codigo] = total;
+    });
+  } else if (mapaCarteira) {
+    aplicarCarteiraMapa(mapaCarteira);
+  }
+
+  desenharResumoFinanceiro();
+  desenharCarteira();
+  desenharBoleta();
 }
 
-// ponto unico de entrada de preco
 function aplicarPreco(codigo, novoPreco, nome) {
   let ativo = achar(codigo);
   if (!ativo) {
     ativo = { codigo, nome: nome || "", preco: novoPreco, base: novoPreco };
     estado.ativos.push(ativo);
-    if (estado.carteira[codigo] === undefined) estado.carteira[codigo] = 0;
+    garantirPosicao(codigo);
     atualizarSelectAtivos();
   } else if (nome && !ativo.nome) {
     ativo.nome = nome;
@@ -97,22 +264,145 @@ function aplicarPreco(codigo, novoPreco, nome) {
   ativo.preco = novoPreco;
   desenharTabela();
   desenharBoleta();
+  desenharCarteira();
+  desenharResumoFinanceiro();
   log(`Preço da ${codigo} atualizou para R$ ${fmt(novoPreco)}.`);
+}
+
+// --- renderizacao da interface ---
+
+function desenharSaldo() {
+  setTexto("saldo", "R$ " + fmt(estado.saldo));
+}
+
+function desenharResumoFinanceiro() {
+  const r = calcularResumoCarteira();
+  desenharSaldo();
+  setTexto("saldo-reservado", "R$ " + fmt(r.saldoReservado));
+  setTexto("patrimonio", "R$ " + fmt(r.patrimonioTotal));
+
+  const sinal = r.lucroPrejuizoTotal > 0.005 ? "+" : r.lucroPrejuizoTotal < -0.005 ? "−" : "";
+  const classe = r.lucroPrejuizoTotal > 0.005 ? "mono alta" : r.lucroPrejuizoTotal < -0.005 ? "mono baixa" : "mono neutro";
+  setTexto(
+    "lucro-prejuizo",
+    `${sinal}R$ ${fmt(Math.abs(r.lucroPrejuizoTotal))} (${sinal}${fmt(Math.abs(r.lucroPercentualTotal))}%)`
+  );
+  setClasse("lucro-prejuizo", classe);
+  setTexto("resumo-carteira", `Em ativos: R$ ${fmt(r.valorEmAtivos)}`);
+}
+
+function desenharTabela() {
+  const html = estado.ativos
+    .map((a) => {
+      const v = calcularVariacao(a);
+      const tipo = v > 0.005 ? "alta" : v < -0.005 ? "baixa" : "neutro";
+      const sinal = tipo === "alta" ? "+" : tipo === "baixa" ? "−" : "";
+      return `
+        <div class="linha linha-mercado">
+          <span class="codigo">${esc(a.codigo)}<small class="nome-empresa">${a.nome ? ` · ${esc(a.nome)}` : ""}</small></span>
+          <span class="mono dir">R$ ${fmt(a.preco)}</span>
+          <span class="mono dir ${tipo}">${sinal}${fmt(Math.abs(v))}%</span>
+          <span class="mono dir">0</span>
+          <span class="mono dir alta">—</span>
+          <span class="mono dir baixa">—</span>
+        </div>`;
+    })
+    .join("");
+  setHtml("tabela", html);
+}
+
+function desenharCarteira() {
+  const { posicoesAtivas } = calcularResumoCarteira();
+  if (posicoesAtivas.length === 0) {
+    setHtml("tabela-carteira", `<div class="vazio">Você ainda não possui ativos em carteira.</div>`);
+    return;
+  }
+
+  const html = posicoesAtivas
+    .map((p) => {
+      const tipo = p.lucroPrejuizo > 0.005 ? "alta" : p.lucroPrejuizo < -0.005 ? "baixa" : "neutro";
+      const sinal = tipo === "alta" ? "+" : tipo === "baixa" ? "−" : "";
+      const detalheRes = p.reservada > 0 ? `<small class="sub-dado">${fmtInt(p.reservada)} reservadas</small>` : "";
+      const pmTxt = p.precoMedio > 0 ? `R$ ${fmt(p.precoMedio)}` : "—";
+
+      return `
+        <div class="linha linha-carteira">
+          <span class="codigo">${esc(p.codigo)}<small class="nome-empresa">${p.nome ? ` · ${esc(p.nome)}` : ""}</small></span>
+          <span class="mono dir">${fmtInt(p.quantidade)}${detalheRes}</span>
+          <span class="mono dir">${pmTxt}</span>
+          <span class="mono dir">R$ ${fmt(p.precoAtual)}</span>
+          <span class="mono dir">R$ ${fmt(p.valorAtual)}</span>
+          <span class="mono dir ${tipo}">${sinal}R$ ${fmt(Math.abs(p.lucroPrejuizo))} (${sinal}${fmt(Math.abs(p.lucroPercentual))}%)</span>
+        </div>`;
+    })
+    .join("");
+  setHtml("tabela-carteira", html);
+}
+
+function desenharBoleta() {
+  const sel = $("ativo");
+  const codigo = (sel && sel.value) || estado.ativoSelecionado;
+  const pos = calcularPosicao(codigo);
+  const ativo = achar(codigo);
+  const livre = Math.max(0, pos.quantidade - pos.reservada);
+  const infoRes = pos.reservada > 0 ? ` (${fmtInt(livre)} livres · ${fmtInt(pos.reservada)} reservadas)` : "";
+
+  setTexto("posicao", `Você possui: ${pos.quantidade} ${codigo}${infoRes}`);
+  setTexto("preco-mercado", ativo ? `Preço de mercado agora: R$ ${fmt(ativo.preco)}` : "");
+
+  const qtdEl = $("qtd");
+  const precoEl = $("preco");
+  const qtd = qtdEl ? parseInt(qtdEl.value, 10) : 0;
+  const preco = precoEl ? parseFloat(String(precoEl.value || "").replace(",", ".")) : 0;
+  setTexto("total-ordem", qtd > 0 && preco > 0 ? `Total estimado: R$ ${fmt(qtd * preco)}` : "");
+}
+
+function desenharFeed() {
+  const html = estado.logs
+    .map((l) => `<div class="feed-item"><time>${esc(l.hora)}</time><span class="${esc(l.tipo)}">${esc(l.msg)}</span></div>`)
+    .join("");
+  setHtml("feed", html);
+}
+
+function atualizarSelectAtivos() {
+  const sel = $("ativo");
+  if (!sel) return;
+  const atual = sel.value || estado.ativoSelecionado;
+  sel.innerHTML = estado.ativos
+    .map((a) => `<option value="${esc(a.codigo)}">${esc(a.codigo)}${a.nome ? ` — ${esc(a.nome)}` : ""}</option>`)
+    .join("");
+  if (atual && achar(atual)) {
+    sel.value = atual;
+    estado.ativoSelecionado = atual;
+  }
+}
+
+function selecionarAba(aba) {
+  estado.abaAtiva = aba;
+  setHidden("painel-ordens", aba !== "ordens");
+  setHidden("painel-negocios", aba !== "negocios");
+  setHidden("painel-feed", aba !== "feed");
+  setClasse("tab-ordens", aba === "ordens" ? "aba ativa" : "aba");
+  setClasse("tab-negocios", aba === "negocios" ? "aba ativa" : "aba");
+  setClasse("tab-feed", aba === "feed" ? "aba ativa" : "aba");
+}
+
+function log(msg, tipo = "info") {
+  estado.logs.unshift({ hora: agora(), msg, tipo });
+  estado.logs.length = Math.min(estado.logs.length, MAX_LOGS);
+  desenharFeed();
 }
 
 // --- autenticacao REST ---
 
-// conta fixa para demonstracao quando o backend nao esta disponivel
 const CONTA_TESTE = { username: "teste", password: "teste123" };
 
-// erro que indica backend fora do ar (ou rota /auth ainda nao publicada)
 function erroOffline() {
   const e = new Error("Servidor indisponível");
   e.offline = true;
   return e;
 }
 
-// faz login ou cadastro no backend e retorna { token, username, ... }
 async function authRest(endpoint, username, password) {
   let res;
   try {
@@ -122,22 +412,18 @@ async function authRest(endpoint, username, password) {
       body: JSON.stringify({ username, password }),
     });
   } catch {
-    throw erroOffline(); // falha de rede / CORS / servidor desligado
+    throw erroOffline();
   }
-  if (res.status === 404) throw erroOffline(); // backend sem o modulo de auth
-  // corpo pode vir vazio (ex.: 404 sem payload), entao nao quebra se nao for JSON
+  if (res.status === 404) throw erroOffline();
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    // contrato do M2: { type: "AUTH_ERROR", code, message }
     throw new Error(data.message || data.error || `Erro ${res.status}`);
   }
   return data;
 }
 
-// --- modo demonstracao (sem backend) ---
-// mesma forma de resposta do AUTH_SUCCESS do M2, mas sem token
 function contasLocais() {
-  return JSON.parse(localStorage.getItem("contasDemo") || "{}");
+  return JSON.parse(storageGet("contasDemo") || "{}");
 }
 
 function authLocal(endpoint, username, password) {
@@ -148,7 +434,7 @@ function authLocal(endpoint, username, password) {
       throw new Error("Username já está em uso");
     }
     contas[username] = password;
-    localStorage.setItem("contasDemo", JSON.stringify(contas));
+    storageSet("contasDemo", JSON.stringify(contas));
   } else {
     const ok =
       (username === CONTA_TESTE.username && password === CONTA_TESTE.password) ||
@@ -163,36 +449,35 @@ function authLocal(endpoint, username, password) {
   };
 }
 
-// tenta o backend; se ele estiver fora, usa o modo demonstracao
 async function autenticar(endpoint, username, password) {
   try {
     return await authRest(endpoint, username, password);
   } catch (e) {
-    if (!e.offline) throw e; // erro real do backend (senha errada, usuario existente...)
+    if (!e.offline) throw e;
     return authLocal(endpoint, username, password);
   }
 }
 
-// mostra ou limpa mensagem de erro no formulário de login
 function setErroAuth(msg) {
   let el = $("erro-auth");
-  if (!el) {
+  if (!el && typeof document.createElement === "function") {
     el = document.createElement("p");
     el.id = "erro-auth";
     el.className = "nota erro";
     $("form-login").insertBefore(el, $("btn-submit-auth"));
   }
-  el.textContent = msg || "";
-  el.hidden = !msg;
+  if (el) {
+    el.textContent = msg || "";
+    el.hidden = !msg;
+  }
 }
 
-// alterna entre modo "entrar" e "criar conta" na tela de login
 function toggleModoAuth() {
   estado.modoAuth = estado.modoAuth === "login" ? "register" : "login";
   const isRegister = estado.modoAuth === "register";
-  $("btn-submit-auth").textContent = isRegister ? "Criar conta" : "Entrar no mercado";
-  $("btn-toggle-auth").textContent = isRegister ? "Já tenho conta" : "Criar conta";
-  $("label-toggle-auth").textContent = isRegister ? "Já tem conta?" : "Não tem conta?";
+  setTexto("btn-submit-auth", isRegister ? "Criar conta" : "Entrar no mercado");
+  setTexto("btn-toggle-auth", isRegister ? "Já tenho conta" : "Criar conta");
+  setTexto("label-toggle-auth", isRegister ? "Já tem conta?" : "Não tem conta?");
   setErroAuth("");
 }
 
@@ -201,12 +486,10 @@ function toggleModoAuth() {
 let stomp = null;
 let timerPrecos = null;
 
-// recebe o token JWT e abre a conexão STOMP autenticada
 function conectarStomp(token) {
   stomp = new StompJs.Client({
     brokerURL: WS_URL,
     connectHeaders: {
-      // token JWT no header do CONNECT — backend valida aqui, nao na URL
       Authorization: `Bearer ${token}`,
     },
     reconnectDelay: 5000,
@@ -214,13 +497,11 @@ function conectarStomp(token) {
     onConnect: () => {
       log("Conectado ao servidor do mercado.");
 
-      // para a simulacao local se o server conectou
-      if (timerPrecos) {
+      if (timerPrecos && typeof clearInterval !== "undefined") {
         clearInterval(timerPrecos);
         timerPrecos = null;
       }
 
-      // topico publico de mercado
       stomp.subscribe("/topic/market", (msg) => {
         try {
           const evento = JSON.parse(msg.body);
@@ -236,14 +517,12 @@ function conectarStomp(token) {
         }
       });
 
-      // respostas individuais (dados de saldo, carteira ou lista de ativos)
       stomp.subscribe("/user/queue/replies", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
-          const d = resp.data || resp;
+          const d = resp.data !== undefined ? resp.data : resp;
           const tipo = resp.type || "";
 
-          // 1. Catálogo oficial de ativos (ASSET_LIST)
           const listaAtivos = Array.isArray(d) ? d : (Array.isArray(resp.ativos) ? resp.ativos : null);
           if (listaAtivos && (tipo === "ASSET_LIST" || !tipo)) {
             listaAtivos.forEach((a) => {
@@ -253,46 +532,48 @@ function conectarStomp(token) {
               if (cod && p != null) aplicarPreco(cod, Number(p), nome);
             });
             log("Catálogo oficial de ativos sincronizado.", "info");
+            return;
           }
 
-          // 2. Histórico de ordens (ORDER_HISTORY)
-          if (tipo === "ORDER_HISTORY" && Array.isArray(d)) {
-            log(`Histórico sincronizado: ${d.length} ordem(ns) registrada(s).`, "info");
+          if (tipo === "WALLET_SNAPSHOT" || tipo === "WALLET_UPDATED" || tipo === "PORTFOLIO_UPDATED") {
+            aplicarSnapshotCarteira(d, tipo === "WALLET_SNAPSHOT");
+            if (tipo === "WALLET_SNAPSHOT") {
+              log("Carteira sincronizada com o servidor.", "info");
+            }
+            return;
           }
 
-          // 3. Status de ordem pontual (ORDER_STATUS)
-          if (tipo === "ORDER_STATUS" && d) {
-            log(`Status da ordem ${d.orderId ? d.orderId.substring(0, 8) : ""}: ${d.status}`, d.status === "ACCEPTED" ? "ok" : "info");
-          }
-
-          // 4. Atualizações de saldo ou carteira
-          const saldo = d.saldo ?? d.balance ?? resp.saldo ?? resp.balance;
-          if (saldo != null) {
-            estado.saldo = Number(saldo);
-            desenharSaldo();
-          }
-          const carteira = d.carteira || d.portfolio || resp.carteira || resp.portfolio;
-          if (carteira) {
-            Object.assign(estado.carteira, carteira);
-            desenharBoleta();
+          if (d && typeof d === "object") {
+            aplicarSnapshotCarteira(
+              {
+                saldo: d.saldo ?? d.balance ?? resp.saldo ?? resp.balance,
+                saldoReservado: d.saldoReservado ?? d.reservedBalance ?? resp.saldoReservado ?? resp.reservedBalance,
+                carteira: d.carteira || d.portfolio || resp.carteira || resp.portfolio,
+                positions: d.positions || d.posicoes,
+              },
+              false
+            );
           }
         } catch (e) {
           console.error("Erro na resposta do servidor", e);
         }
       });
 
-      // confirmacao ou rejeicao de ordens
       stomp.subscribe("/user/queue/orders", (msg) => {
         try {
           const resp = JSON.parse(msg.body);
           const d = resp.data || resp;
           const tipoEvento = resp.type || "";
 
+          if (tipoEvento === "WALLET_UPDATED" || tipoEvento === "PORTFOLIO_UPDATED") {
+            aplicarSnapshotCarteira(d, false);
+            return;
+          }
+
           const status = d.status || (d.sucesso ? "ACCEPTED" : (d.status === "OK" ? "ACCEPTED" : "REJECTED"));
           const ehSucesso = status === "ACCEPTED" || status === "OK";
           const tipoVisual = ehSucesso ? "ok" : "erro";
 
-          // mapeia RejectReason do backend para mensagem amigavel em portugues
           const razoes = {
             INVALID_FIELDS: "Dados da ordem inválidos.",
             INVALID_QUANTITY: "Quantidade inválida.",
@@ -322,7 +603,6 @@ function conectarStomp(token) {
             } else {
               mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita com sucesso!`;
             }
-
           } else {
             mensagem = razoes[d.reason]
               || d.mensagem
@@ -332,23 +612,16 @@ function conectarStomp(token) {
 
           log(mensagem, tipoVisual);
 
-          const saldo = d.saldo ?? d.balance;
-          if (saldo != null) {
-            estado.saldo = Number(saldo);
-            desenharSaldo();
-          }
-          const carteira = d.carteira ?? d.portfolio;
-          if (carteira) {
-            Object.assign(estado.carteira, carteira);
-            desenharBoleta();
+          if (d.saldo != null || d.balance != null || d.saldoReservado != null || d.reservedBalance != null || d.carteira || d.portfolio || d.positions) {
+            aplicarSnapshotCarteira(d, false);
           }
         } catch (e) {
           console.error("Erro ao processar retorno da ordem", e);
         }
       });
 
-      // requisicoes iniciais
       stomp.publish({ destination: "/app/assets/list", body: "{}" });
+      stomp.publish({ destination: "/app/wallet/me", body: "{}" });
       stomp.publish({ destination: "/app/orders/mine", body: "{}" });
     },
 
@@ -358,14 +631,13 @@ function conectarStomp(token) {
 
     onStompError: (frame) => {
       const msg = frame.headers?.message || "";
-      // token expirado ou invalido — limpa e volta para o login
       if (
         msg.toLowerCase().includes("token") ||
         msg.toLowerCase().includes("unauthorized") ||
         msg.includes("401")
       ) {
         log("Sessão expirada. Faça login novamente.", "erro");
-        localStorage.removeItem("jwtToken");
+        storageRemove("jwtToken");
         sair();
       } else {
         log("Erro STOMP: " + (msg || "falha na conexão"), "erro");
@@ -376,27 +648,24 @@ function conectarStomp(token) {
   stomp.activate();
 }
 
-// envio de ordens
 function enviarOrdem(lado) {
-  const codigo = $("ativo").value;
+  const codigo = ($("ativo") && $("ativo").value) || estado.ativoSelecionado;
   const qtd = parseInt($("qtd").value, 10);
-  const preco = parseFloat($("preco").value.replace(",", "."));
+  const preco = parseFloat(String($("preco").value).replace(",", "."));
 
   if (!(qtd > 0) || !(preco > 0)) {
     return log("Informe uma quantidade e um preço válidos.", "erro");
   }
 
   if (stomp && stomp.connected) {
-    // envia pro backend processar
     stomp.publish({
       destination: "/app/orders/create",
       body: JSON.stringify({
-        clientOrderId: crypto.randomUUID(),   // correlação request ↔ resposta
+        clientOrderId: gerarUuid(),
         symbol: codigo,
         side: lado === "compra" ? "BUY" : "SELL",
         quantity: qtd,
         price: preco.toFixed(2),
-        // userId NÃO é enviado pelo frontend — o backend injeta via sessão STOMP
       }),
     });
     log(`Enviando ordem de ${lado} de ${qtd} ${codigo} ao servidor...`);
@@ -405,9 +674,6 @@ function enviarOrdem(lado) {
   }
 }
 
-// --- navegacao entre telas ---
-
-// tenta login REST; se o servidor estiver fora, entra em modo demonstracao
 async function entrar(nome, senha) {
   if (!nome) return setErroAuth("Informe um nome de usuário.");
 
@@ -416,55 +682,53 @@ async function entrar(nome, senha) {
   try {
     const data = await autenticar("/auth/login", nome, senha);
     token = data.token;
-    if (token) localStorage.setItem("jwtToken", token);
+    if (token) storageSet("jwtToken", token);
     estado.usuario = data.username || nome;
 
-    // saldo e carteira oficiais vindos do backend (contrato AUTH_SUCCESS)
-    if (data.balance != null) estado.saldo = Number(data.balance);
-    if (data.portfolio) {
-      // zera antes para nao herdar posicoes de um login anterior
-      Object.keys(estado.carteira).forEach((k) => (estado.carteira[k] = 0));
-      Object.assign(estado.carteira, data.portfolio);
-    }
+    aplicarSnapshotCarteira(
+      {
+        balance: data.balance != null ? Number(data.balance) : 10000,
+        reservedBalance: data.reservedBalance != null ? Number(data.reservedBalance) : 0,
+        portfolio: data.portfolio || { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
+      },
+      true
+    );
   } catch (e) {
-    // credenciais erradas ou servidor fora — permanece na tela de login
     setErroAuth(e.message || "Erro ao conectar ao servidor.");
     return;
   }
 
-  // transicao para a tela de mercado
   setErroAuth("");
-  $("tela-login").hidden = true;
-  $("tela-mercado").hidden = false;
-  $("ola").textContent = `Olá, ${estado.usuario}!`;
   estado.logs = [];
-  desenharSaldo();
-  desenharTabela();
-  desenharBoleta();
+  setHidden("tela-login", true);
+  setHidden("tela-mercado", false);
+  setTexto("ola", `Olá, ${estado.usuario}!`);
 
-  // conecta STOMP com o token JWT (sem token = modo demonstracao local)
+  desenharResumoFinanceiro();
+  desenharTabela();
+  desenharCarteira();
+  desenharBoleta();
+  selecionarAba("ordens");
+
   if (token) {
     conectarStomp(token);
   } else {
     log("Servidor indisponível — modo demonstração local.", "erro");
+    if (typeof setInterval !== "undefined") {
+      timerPrecos = setInterval(() => {
+        const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
+        const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
+        aplicarPreco(a.codigo, Math.max(0.01, novo));
+      }, 3000);
+    }
   }
-
-  // simulacao local de reserva caso o STOMP nao conecte
-  timerPrecos = setInterval(() => {
-    if (stomp && stomp.connected) return;
-    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
-    const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
-    aplicarPreco(a.codigo, Math.max(0.01, novo));
-  }, 3000);
 }
 
-// cadastra novo usuario e, em seguida, faz login automatico
 async function cadastrar(nome, senha) {
   if (!nome || !senha) return setErroAuth("Informe usuário e senha para criar conta.");
 
   try {
     await autenticar("/auth/register", nome, senha);
-    // cadastro ok — loga automaticamente
     await entrar(nome, senha);
   } catch (e) {
     setErroAuth(e.message || "Erro ao criar conta.");
@@ -472,7 +736,7 @@ async function cadastrar(nome, senha) {
 }
 
 function sair() {
-  if (timerPrecos) {
+  if (timerPrecos && typeof clearInterval !== "undefined") {
     clearInterval(timerPrecos);
     timerPrecos = null;
   }
@@ -480,21 +744,38 @@ function sair() {
     stomp.deactivate();
     stomp = null;
   }
-  localStorage.removeItem("jwtToken");
-  $("tela-mercado").hidden = true;
-  $("tela-login").hidden = false;
+  storageRemove("jwtToken");
+  setHidden("tela-mercado", true);
+  setHidden("tela-login", false);
 }
 
-// ligacao entre os eventos
+function ligarEvento(id, evento, fn) {
+  const el = $(id);
+  if (el && typeof el.addEventListener === "function") {
+    el.addEventListener(evento, fn);
+  }
+}
+
 atualizarSelectAtivos();
 
-$("ativo").addEventListener("change", () => {
-  const ativo = achar($("ativo").value);
-  if (ativo) $("preco").value = fmt(ativo.preco);
-  desenharBoleta();
+ligarEvento("ativo", "change", () => {
+  const sel = $("ativo");
+  if (sel) {
+    estado.ativoSelecionado = sel.value;
+    const ativo = achar(sel.value);
+    if (ativo && $("preco")) $("preco").value = fmt(ativo.preco);
+    desenharBoleta();
+  }
 });
 
-$("form-login").addEventListener("submit", (e) => {
+ligarEvento("qtd", "input", desenharBoleta);
+ligarEvento("preco", "input", desenharBoleta);
+
+ligarEvento("tab-ordens", "click", () => selecionarAba("ordens"));
+ligarEvento("tab-negocios", "click", () => selecionarAba("negocios"));
+ligarEvento("tab-feed", "click", () => selecionarAba("feed"));
+
+ligarEvento("form-login", "submit", (e) => {
   e.preventDefault();
   const nome = $("usuario").value.trim();
   const senha = $("senha").value;
@@ -505,7 +786,7 @@ $("form-login").addEventListener("submit", (e) => {
   }
 });
 
-$("btn-toggle-auth").addEventListener("click", toggleModoAuth);
-$("btn-sair").addEventListener("click", sair);
-$("btn-comprar").addEventListener("click", () => enviarOrdem("compra"));
-$("btn-vender").addEventListener("click", () => enviarOrdem("venda"));
+ligarEvento("btn-toggle-auth", "click", toggleModoAuth);
+ligarEvento("btn-sair", "click", sair);
+ligarEvento("btn-comprar", "click", () => enviarOrdem("compra"));
+ligarEvento("btn-vender", "click", () => enviarOrdem("venda"));
