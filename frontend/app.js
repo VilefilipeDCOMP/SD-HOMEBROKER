@@ -1284,8 +1284,39 @@ function enviarOrdem(lado) {
   }
 }
 
-function cancelarOrdem() {}
-function consultarStatusOrdem() {}
+function cancelarOrdem(orderId) {
+  if (!orderId) return;
+  if (stomp && stomp.connected) {
+    stomp.publish({
+      destination: "/app/orders/cancel",
+      body: JSON.stringify({ orderId }),
+    });
+    log(`Solicitando cancelamento da ordem ${orderId.slice(0, 8)}...`, "info");
+  } else {
+    const msg = "Sem conexão com o servidor. Não foi possível cancelar a ordem.";
+    mostrarAlerta(msg, "erro");
+    log(msg, "erro");
+  }
+}
+
+function consultarStatusOrdem(orderId) {
+  const id = String(orderId || "").trim();
+  if (!id) {
+    mostrarAlerta("Informe o ID da ordem para consultar.", "aviso");
+    return;
+  }
+  if (stomp && stomp.connected) {
+    stomp.publish({
+      destination: "/app/orders/status",
+      body: JSON.stringify({ orderId: id }),
+    });
+    log(`Consultando status da ordem ${id.slice(0, 8)}...`, "info");
+  } else {
+    const msg = "Sem conexão com o servidor. Não foi possível consultar a ordem.";
+    mostrarAlerta(msg, "erro");
+    log(msg, "erro");
+  }
+}
 
 // --- navegacao entre telas ---
 
