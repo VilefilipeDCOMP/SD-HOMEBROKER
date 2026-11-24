@@ -1,6 +1,6 @@
 const MAX_LOGS = 25;
 const MAX_NEGOCIOS = 100;
-const RECONNECT_DELAY_MS = 5000;
+const RECONNECT_DELAY_MS = 3000;
 
 // servidores locais sem proxy continuam acessando o backend diretamente
 const WS_LOCAL = location.protocol === "file:" || ["5173", "5500"].includes(location.port);
@@ -612,7 +612,18 @@ function desenharBoleta() {
     setTexto("total-ordem", "");
   }
 
-  setHidden("aviso-boleta", true);
+  const offline = estado.conexao.status !== "conectado";
+  const btnCompra = $("btn-comprar");
+  const btnVenda = $("btn-vender");
+  if (btnCompra) btnCompra.disabled = offline;
+  if (btnVenda) btnVenda.disabled = offline;
+
+  if (offline && estado.usuario) {
+    setTexto("aviso-boleta", "Sem conexão ativa com o servidor. Aguarde a reconexão para enviar ordens.");
+    setHidden("aviso-boleta", false);
+  } else {
+    setHidden("aviso-boleta", true);
+  }
 }
 
 function classeBadgeStatus(status) {
@@ -1218,7 +1229,22 @@ function conectarStomp(token) {
       recarregarEstadoCompleto(ehReconexao, false);
     },
 
+    onWebSocketClose: () => {
+      if (saindoVoluntariamente) return;
+      const estavaConectado = estado.conexao.status === "conectado";
+      estado.conexao.tentativas += 1;
+      estado.conexao.status = "reconectando";
+      desenharStatusConexao();
+
+      if (estavaConectado || estado.conexao.tentativas === 1) {
+        log("Conexão perdida com o servidor. Tentando reconectar...", "erro");
+      }
+    },
+
     onDisconnect: () => {
+      if (saindoVoluntariamente) return;
+      estado.conexao.status = "desconectado";
+      desenharStatusConexao();
       log("Desconectado do servidor.", "erro");
     },
 
