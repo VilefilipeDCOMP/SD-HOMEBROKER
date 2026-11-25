@@ -60,4 +60,37 @@ public final class Order {
     public BigDecimal totalValue() {
         return price.multiply(BigDecimal.valueOf(quantity));
     }
+
+    private volatile long filledQuantity;
+
+    public long remainingQuantity() {
+        return quantity - filledQuantity;
+    }
+
+    public synchronized void fill(long amount) {
+        boolean open = status == OrderStatus.ACCEPTED
+                || status == OrderStatus.PARTIALLY_FILLED;
+        if (!open || amount <= 0 || amount > remainingQuantity()) {
+            throw new IllegalStateException("Execução inválida");
+        }
+        filledQuantity += amount;
+        status = remainingQuantity() == 0
+                ? OrderStatus.FILLED
+                : OrderStatus.PARTIALLY_FILLED;
+    }
+
+    public synchronized boolean cancel() {
+        if (status != OrderStatus.ACCEPTED
+                && status != OrderStatus.PARTIALLY_FILLED) {
+            return false;
+        }
+        status = OrderStatus.CANCELLED;
+        return true;
+    }
+
+    public synchronized boolean cancel(RejectReason reason) {
+        if (!cancel()) return false;
+        rejectReason = reason;
+        return true;
+    }
 }

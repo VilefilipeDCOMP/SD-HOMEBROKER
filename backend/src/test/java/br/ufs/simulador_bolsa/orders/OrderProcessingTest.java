@@ -183,7 +183,8 @@ class OrderProcessingTest {
             public void releaseShares(String u, String s, long q) { }
         };
 
-        var processor = new OrderProcessor(failingWallet, order -> { });
+        var processor = new OrderProcessor(failingWallet, order -> { },
+                new MatchingEngine(trade -> { }, failingWallet, order -> { }));
         var service = new OrderService(new OrderValidator(new AssetCatalog()), processor);
         processor.start();
         try {
