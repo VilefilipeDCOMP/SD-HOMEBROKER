@@ -26,6 +26,7 @@ public class OrderProcessor {
 
     private final WalletPort wallet;
     private final OrderNotifier notifier;
+    private final MatchingEngine engine;
     private final BlockingQueue<Order> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
     private volatile boolean running;
@@ -114,6 +115,7 @@ public class OrderProcessor {
             log.info("ORDER_ACCEPTED orderId={} userId={} seq={} {} {} x{} @{}",
                     order.orderId(), order.userId(), order.sequenceNumber(),
                     order.side(), order.symbol(), order.quantity(), order.price());
+            engine.match(order);
         } else {
             order.reject(failure);
             log.info("ORDER_REJECTED orderId={} userId={} seq={} reason={}",

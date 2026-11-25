@@ -15,7 +15,8 @@ final class OrdersKit {
 
     OrdersKit(String initialBalance, OrderNotifier notifier) {
         this.wallet = new InMemoryWallet(new BigDecimal(initialBalance));
-        this.processor = new OrderProcessor(wallet, notifier);
+        this.processor = new OrderProcessor(wallet, notifier,
+                new MatchingEngine(trade -> { }, wallet, notifier));
         this.service = new OrderService(new OrderValidator(new AssetCatalog()), processor);
         this.processor.start();
     }

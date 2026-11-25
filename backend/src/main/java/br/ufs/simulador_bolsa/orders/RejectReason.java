@@ -9,5 +9,6 @@ public enum RejectReason {
     INSUFFICIENT_FUNDS,
     INSUFFICIENT_SHARES,
     SYSTEM_BUSY,
-    INTERNAL_ERROR
+    INTERNAL_ERROR,
+    SELF_TRADE
 }
