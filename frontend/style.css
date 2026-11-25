@@ -1,8 +1,9 @@
-/* Tema (cores e fontes em um só lugar) */
+/* tema e variaveis globais */
 :root {
   --bg: #0b1220;
   --painel: #111a2e;
   --linha-bg: #0f1830;
+  --linha-hover: #152242;
   --borda: #1f2b45;
   --campo: #2a3856;
   --texto: #e6ebf5;
@@ -12,6 +13,7 @@
   --azul-texto: #06202e;
   --alta: #34d399;
   --baixa: #f87171;
+  --aviso: #f59e0b;
   --compra: #15803d;
   --venda: #b91c1c;
   --sans: "IBM Plex Sans", system-ui, sans-serif;
@@ -51,7 +53,7 @@ p {
   background: var(--painel);
   border: 1px solid var(--borda);
   border-radius: 16px;
-  padding: 24px;
+  padding: 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -62,6 +64,14 @@ p {
   font-weight: 600;
 }
 
+.cabecalho-secao {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .logo {
   width: 40px;
   height: 40px;
@@ -70,6 +80,7 @@ p {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .logo-grande {
@@ -97,7 +108,7 @@ label {
 
 input,
 select {
-  height: 46px;
+  height: 44px;
   width: 100%;
   padding: 0 14px;
   border-radius: 10px;
@@ -120,7 +131,7 @@ button:focus-visible {
 }
 
 .btn {
-  height: 48px;
+  height: 46px;
   border: 0;
   border-radius: 10px;
   font-family: inherit;
@@ -129,12 +140,18 @@ button:focus-visible {
   cursor: pointer;
 }
 
+.btn:disabled,
+.btn-mini:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .btn-azul {
   background: var(--azul);
   color: var(--azul-texto);
 }
 
-.btn-azul:hover {
+.btn-azul:hover:not(:disabled) {
   background: var(--azul-hover);
 }
 
@@ -148,9 +165,39 @@ button:focus-visible {
   color: #fff;
 }
 
-.btn-compra:hover,
-.btn-venda:hover {
+.btn-compra:hover:not(:disabled),
+.btn-venda:hover:not(:disabled) {
   filter: brightness(1.1);
+}
+
+.btn-mini {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--campo);
+  background: var(--bg);
+  color: var(--texto);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-mini:hover:not(:disabled) {
+  border-color: var(--azul);
+  color: var(--azul);
+}
+
+.btn-mini-perigo {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: var(--baixa);
+}
+
+.btn-mini-perigo:hover:not(:disabled) {
+  border-color: var(--baixa);
+  background: rgba(248, 113, 113, 0.12);
+  color: var(--baixa);
 }
 
 .link {
@@ -167,7 +214,7 @@ button:focus-visible {
   color: var(--texto);
 }
 
-/* login pro max */
+/* login */
 .login {
   position: relative;
   min-height: 100vh;
@@ -207,7 +254,6 @@ button:focus-visible {
   margin-top: -8px;
 }
 
-/* alternar entre entrar / criar conta */
 .auth-toggle {
   display: flex;
   justify-content: center;
@@ -226,19 +272,12 @@ button:focus-visible {
   color: var(--azul-hover);
 }
 
-.conta-teste {
-  text-align: center;
-  padding: 10px;
-  border: 1px dashed var(--borda);
-  border-radius: 10px;
-}
-
 #erro-auth {
   font-size: 13px;
   margin-top: -8px;
 }
 
-/* mercado geral */
+/* cabecalho do home broker */
 #tela-mercado {
   min-height: 100vh;
   display: flex;
@@ -260,15 +299,73 @@ button:focus-visible {
 .topo-dir {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .topo-esq {
   gap: 12px;
-  font-size: 18px;
+}
+
+.identidade {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.identidade strong {
+  font-size: 17px;
 }
 
 .topo-dir {
-  gap: 24px;
+  gap: 20px;
+}
+
+.resumo-financeiro {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.acoes-topo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--borda);
+}
+
+.status-conectado {
+  color: var(--alta);
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.1);
+}
+
+.status-reconectando {
+  color: var(--aviso);
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.status-desconectado {
+  color: var(--baixa);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.status-demo {
+  color: var(--azul);
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.1);
 }
 
 .saldo {
@@ -279,47 +376,119 @@ button:focus-visible {
 }
 
 .saldo span {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--suave);
 }
 
 .saldo strong {
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 500;
   color: var(--alta);
 }
 
+.saldo-secundario strong {
+  font-size: 16px;
+  color: var(--texto);
+}
+
+/* banners de alerta */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.banner-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.banner-erro {
+  background: rgba(185, 28, 28, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+.banner-aviso {
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.banner-ok {
+  background: rgba(21, 128, 61, 0.18);
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  color: #bbf7d0;
+}
+
+/* layout principal */
 .conteudo {
   flex: 1;
   padding: 24px 32px 32px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
 .colunas {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 24px;
+  align-items: stretch;
+  gap: 20px;
 }
 
 .mercado {
-  flex: 3 1 420px;
+  flex: 3 1 520px;
+  min-width: 0;
+}
+
+.livro {
+  flex: 2 1 320px;
   min-width: 0;
 }
 
 .boleta {
-  flex: 2 1 340px;
+  flex: 1.5 1 280px;
   min-width: 0;
-  gap: 18px;
+  gap: 14px;
+}
+
+/* tabelas */
+.tabela-wrap {
+  width: 100%;
+  overflow-x: auto;
 }
 
 .linha {
   display: grid;
-  grid-template-columns: 1.2fr 1.4fr 1fr;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
+}
+
+.linha-mercado {
+  grid-template-columns: 1.5fr 1fr 0.9fr 0.8fr 1fr 1fr;
+  min-width: 560px;
+}
+
+.linha-carteira {
+  grid-template-columns: 1.3fr 1fr 1fr 1fr 1fr 1.3fr;
+  min-width: 580px;
+}
+
+.linha-ordens {
+  grid-template-columns: 0.9fr 0.8fr 0.8fr 1fr 0.9fr 1.2fr 1.3fr;
+  min-width: 680px;
+}
+
+.linha-negocios {
+  grid-template-columns: 0.9fr 0.9fr 0.8fr 0.9fr 1fr 1fr;
+  min-width: 540px;
 }
 
 .cabecalho-tabela {
@@ -333,13 +502,30 @@ button:focus-visible {
 .tabela {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .tabela .linha {
-  padding: 12px;
+  padding: 11px 12px;
   border-radius: 10px;
   background: var(--linha-bg);
+  font-size: 14px;
+}
+
+.linha-clicavel {
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.linha-clicavel:hover {
+  background: var(--linha-hover);
+}
+
+.linha-selecionada {
+  border-color: var(--azul);
+  background: var(--linha-hover);
 }
 
 .tabela .codigo {
@@ -353,16 +539,69 @@ button:focus-visible {
   margin-left: 6px;
 }
 
-.tabela .preco {
-  font-family: var(--mono);
-  font-size: 15px;
-  text-align: right;
+.sub-dado {
+  display: block;
+  font-size: 11px;
+  color: var(--suave);
 }
 
-.tabela .variacao {
-  font-family: var(--mono);
+.vazio {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--suave);
   font-size: 13px;
-  text-align: right;
+  background: var(--linha-bg);
+  border-radius: 10px;
+}
+
+/* livro de ofertas */
+.livro-grade {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  flex: 1;
+}
+
+.livro-lado {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--linha-bg);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.livro-cabecalho {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--borda);
+}
+
+.livro-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.livro-nivel {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.livro-nivel:hover {
+  background: var(--linha-hover);
+}
+
+.livro-nivel-topo {
+  background: rgba(56, 189, 248, 0.08);
+  font-weight: 600;
 }
 
 .botoes {
@@ -375,7 +614,116 @@ button:focus-visible {
   flex: 1;
 }
 
-/* feed massa */
+/* abas e gestao de ordens */
+.abas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid var(--borda);
+  padding-bottom: 12px;
+}
+
+.aba {
+  background: var(--bg);
+  color: var(--suave);
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.aba:hover {
+  color: var(--texto);
+}
+
+.aba.ativa {
+  background: var(--azul);
+  color: var(--azul-texto);
+  border-color: var(--azul);
+}
+
+.painel-aba {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.barra-ordens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.campo-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.campo-inline select {
+  width: auto;
+  height: 36px;
+  font-size: 13px;
+}
+
+.consulta-ordem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+
+.consulta-ordem input {
+  height: 36px;
+  font-size: 13px;
+}
+
+.consulta-resultado {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--linha-bg);
+  border: 1px solid var(--borda);
+  font-size: 13px;
+}
+
+.acoes-ordem {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.badge-status {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(154, 168, 196, 0.14);
+  color: var(--texto);
+}
+
+.badge-ok {
+  background: rgba(52, 211, 153, 0.15);
+  color: var(--alta);
+}
+
+.badge-aviso {
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--aviso);
+}
+
+.badge-erro {
+  background: rgba(248, 113, 113, 0.16);
+  color: var(--baixa);
+}
+
+/* feed */
 .feed {
   display: flex;
   flex-direction: column;
@@ -396,7 +744,7 @@ button:focus-visible {
   color: var(--suave);
 }
 
-/* cores geral */
+/* cores utilitarias */
 .alta,
 .ok {
   color: var(--alta);
@@ -407,16 +755,27 @@ button:focus-visible {
   color: var(--baixa);
 }
 
+.aviso {
+  color: var(--aviso);
+}
+
 .neutro {
   color: var(--suave);
 }
 
 /* responsividade */
-@media (max-width: 600px) {
-
+@media (max-width: 720px) {
   .topo,
   .conteudo {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .saldo {
+    align-items: flex-start;
+  }
+
+  .livro-grade {
+    grid-template-columns: 1fr;
   }
 }

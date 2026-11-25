@@ -11,7 +11,6 @@
 </head>
 <body>
 
- 
   <main id="tela-login" class="login">
     <svg class="login-fundo" aria-hidden="true" viewBox="0 0 1200 300" preserveAspectRatio="none">
       <polyline points="0,260 100,230 200,245 300,190 400,205 500,150 600,170 700,110 800,130 900,70 1000,90 1100,40 1200,55"
@@ -56,33 +55,102 @@
             <polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>
           </svg>
         </div>
-        <strong id="ola">Olá!</strong>
-      </div>
-      <div class="topo-dir">
-        <div class="saldo">
-          <span>Saldo disponível</span>
-          <strong id="saldo" class="mono">R$ 0,00</strong>
+        <div class="identidade">
+          <strong id="ola">Olá!</strong>
+          <span id="status-conexao" class="status-pill status-desconectado">Desconectado</span>
         </div>
-        <button id="btn-sair" type="button" class="link">Sair</button>
+      </div>
+
+      <div class="topo-dir">
+        <div class="resumo-financeiro">
+          <div class="saldo">
+            <span>Saldo disponível</span>
+            <strong id="saldo" class="mono">R$ 0,00</strong>
+          </div>
+          <div class="saldo saldo-secundario">
+            <span>Reservado</span>
+            <strong id="saldo-reservado" class="mono">R$ 0,00</strong>
+          </div>
+          <div class="saldo saldo-secundario">
+            <span>Patrimônio total</span>
+            <strong id="patrimonio" class="mono">R$ 0,00</strong>
+          </div>
+          <div class="saldo saldo-secundario">
+            <span>Lucro / Prejuízo</span>
+            <strong id="lucro-prejuizo" class="mono neutro">R$ 0,00 (0,00%)</strong>
+          </div>
+        </div>
+
+        <div class="acoes-topo">
+          <button id="btn-sincronizar" type="button" class="btn-mini">Sincronizar</button>
+          <button id="btn-sair" type="button" class="link">Sair</button>
+        </div>
       </div>
     </header>
 
     <main class="conteudo">
-      <div class="colunas">
+      <!-- aviso persistente quando a conexao cai -->
+      <div id="banner-conexao" class="banner banner-erro" role="alert" hidden>
+        <div class="banner-texto">
+          <strong>Conexão perdida com o servidor.</strong>
+          <span id="banner-conexao-msg">Tentando reconectar automaticamente. Eventos perdidos não são reenviados; o estado completo será recarregado ao reconectar.</span>
+        </div>
+        <button id="btn-reconectar" type="button" class="btn-mini">Reconectar agora</button>
+      </div>
 
-        <!-- Mercado (visualização) -->
+      <!-- aviso de rejeicao de ordem ou erro operacional -->
+      <div id="banner-alerta" class="banner banner-aviso" role="status" hidden>
+        <span id="banner-alerta-msg"></span>
+        <button id="btn-fechar-alerta" type="button" class="link">Fechar</button>
+      </div>
+
+      <div class="colunas">
+        <!-- mercado -->
         <section class="cartao mercado">
-          <h2>Mercado</h2>
-          <div class="linha cabecalho-tabela">
-            <span>Ativo</span>
-            <span class="dir">Preço atual</span>
-            <span class="dir">Variação</span>
+          <div class="cabecalho-secao">
+            <h2>Mercado</h2>
+            <span class="nota">Clique em um ativo para ver o livro e operar</span>
           </div>
-          <div id="tabela" class="tabela"></div>
-          <p class="nota">Os preços são atualizados automaticamente pelo servidor.</p>
+          <div class="tabela-wrap">
+            <div class="linha linha-mercado cabecalho-tabela">
+              <span>Ativo</span>
+              <span class="dir">Preço atual</span>
+              <span class="dir">Variação</span>
+              <span class="dir">Volume</span>
+              <span class="dir">Melhor compra</span>
+              <span class="dir">Melhor venda</span>
+            </div>
+            <div id="tabela" class="tabela"></div>
+          </div>
+          <p class="nota">Os preços, volumes e ofertas são atualizados em tempo real pelo servidor.</p>
         </section>
 
-        <!-- Boleta (envio de ordens) -->
+        <!-- livro de ofertas -->
+        <section class="cartao livro">
+          <div class="cabecalho-secao">
+            <h2>Livro de ofertas · <span id="livro-ativo" class="mono">PETR4</span></h2>
+            <span id="livro-spread" class="nota mono">Spread: —</span>
+          </div>
+          <div class="livro-grade">
+            <div class="livro-lado">
+              <div class="livro-cabecalho alta">
+                <span>Compra (Bid)</span>
+                <span class="dir">Qtd</span>
+              </div>
+              <div id="livro-compras" class="livro-lista"></div>
+            </div>
+            <div class="livro-lado">
+              <div class="livro-cabecalho baixa">
+                <span>Venda (Ask)</span>
+                <span class="dir">Qtd</span>
+              </div>
+              <div id="livro-vendas" class="livro-lista"></div>
+            </div>
+          </div>
+          <p class="nota">Clique em um preço do livro para preencher a boleta.</p>
+        </section>
+
+        <!-- boleta -->
         <section class="cartao boleta">
           <h2>Boleta</h2>
 
@@ -99,22 +167,95 @@
 
           <div class="campo-grupo">
             <label for="preco">Preço (R$)</label>
-            <input id="preco" type="text" inputmode="decimal" value="34,50" class="mono">
+            <input id="preco" type="text" inputmode="decimal" value="35,00" class="mono">
             <span class="nota" id="preco-mercado"></span>
+            <span class="nota mono" id="total-ordem"></span>
           </div>
+
+          <p id="aviso-boleta" class="nota erro" hidden></p>
 
           <div class="botoes">
             <button id="btn-comprar" type="button" class="btn btn-compra">COMPRAR</button>
             <button id="btn-vender" type="button" class="btn btn-venda">VENDER</button>
           </div>
         </section>
-
       </div>
 
+      <!-- carteira detalhada -->
+      <section class="cartao carteira">
+        <div class="cabecalho-secao">
+          <h2>Minha carteira</h2>
+          <span id="resumo-carteira" class="nota mono">Em ativos: R$ 0,00</span>
+        </div>
+        <div class="tabela-wrap">
+          <div class="linha linha-carteira cabecalho-tabela">
+            <span>Ativo</span>
+            <span class="dir">Quantidade</span>
+            <span class="dir">Preço médio</span>
+            <span class="dir">Preço atual</span>
+            <span class="dir">Valor atual</span>
+            <span class="dir">Lucro / Prejuízo</span>
+          </div>
+          <div id="tabela-carteira" class="tabela"></div>
+        </div>
+      </section>
 
-      <section class="cartao">
-        <h2>Feed de atualizações</h2>
-        <div id="feed" class="feed"></div>
+      <!-- ordens, historico de negociacoes e feed -->
+      <section class="cartao operacoes">
+        <div class="abas">
+          <button id="tab-ordens" type="button" class="aba ativa">Minhas ordens</button>
+          <button id="tab-negocios" type="button" class="aba">Histórico de negociações</button>
+          <button id="tab-feed" type="button" class="aba">Feed de atualizações</button>
+        </div>
+
+        <div id="painel-ordens" class="painel-aba">
+          <div class="barra-ordens">
+            <div class="campo-inline">
+              <label for="filtro-ordens">Exibir</label>
+              <select id="filtro-ordens">
+                <option value="todas">Todas as ordens</option>
+                <option value="abertas">Somente abertas</option>
+              </select>
+            </div>
+            <div class="consulta-ordem">
+              <input id="input-consulta-ordem" type="text" placeholder="Consultar status por orderId..." class="mono">
+              <button id="btn-consultar-ordem" type="button" class="btn-mini">Consultar</button>
+            </div>
+          </div>
+
+          <div id="resultado-consulta-ordem" class="consulta-resultado" hidden></div>
+
+          <div class="tabela-wrap">
+            <div class="linha linha-ordens cabecalho-tabela">
+              <span>Ordem</span>
+              <span>Ativo</span>
+              <span>Lado</span>
+              <span class="dir">Qtd (Exec/Total)</span>
+              <span class="dir">Preço</span>
+              <span>Status</span>
+              <span class="dir">Ações</span>
+            </div>
+            <div id="tabela-ordens" class="tabela"></div>
+          </div>
+        </div>
+
+        <div id="painel-negocios" class="painel-aba" hidden>
+          <div class="tabela-wrap">
+            <div class="linha linha-negocios cabecalho-tabela">
+              <span>Hora</span>
+              <span>Ativo</span>
+              <span>Lado</span>
+              <span class="dir">Quantidade</span>
+              <span class="dir">Preço executado</span>
+              <span class="dir">Total</span>
+            </div>
+            <div id="tabela-negocios" class="tabela"></div>
+          </div>
+        </div>
+
+        <div id="painel-feed" class="painel-aba" hidden>
+          <div id="feed" class="feed"></div>
+        </div>
       </section>
     </main>
   </div>
