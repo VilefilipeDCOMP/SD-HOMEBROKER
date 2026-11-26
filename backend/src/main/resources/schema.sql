@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS ordens (
     usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
     ativo_id BIGINT NOT NULL REFERENCES ativos(id) ON DELETE RESTRICT,
     tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('COMPRA', 'VENDA')),
-    quantidade INT NOT NULL CHECK (quantidade > 0),
+    quantidade INT NOT NULL CHECK (quantidade >= 0),
     preco_alvo NUMERIC(15, 2) NOT NULL CHECK (preco_alvo > 0),
     status VARCHAR(20) NOT NULL DEFAULT 'ABERTA' CHECK (status IN ('ABERTA', 'EXECUTADA', 'CANCELADA')),
     criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
