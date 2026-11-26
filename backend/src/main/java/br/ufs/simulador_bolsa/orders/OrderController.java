@@ -2,6 +2,7 @@ package br.ufs.simulador_bolsa.orders;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ public class OrderController {
 
     private final OrderService orderService;
     private final CurrentUserResolver users;
+    private final MatchingEngine matchingEngine;
 
     //é por onde a ordem chega
     @MessageMapping("/orders/create")
@@ -35,7 +37,7 @@ public class OrderController {
         SubmitOrderMessage body = message != null ? message //validação caso a ordem seja toda vazia
                 : new SubmitOrderMessage(null, null, null, null, null);
 
-        //processa a ordem lá no orderSertvice
+        //processa a ordem lá no orderService
         OrderResult result = orderService.submit(body.toRequest(userId));
         //e retorna a confirmação
         return event("ORDER_ACK", result.clientOrderId(), result);
@@ -51,6 +53,32 @@ public class OrderController {
         return orderService.findByIdForUser(orderId, userId)
                 .map(order -> event("ORDER_STATUS", order.clientOrderId(), OrderResult.of(order)))
                 .orElseGet(() -> event("ORDER_NOT_FOUND", orderId, null));
+    }
+
+    //cancela uma ordem aberta do próprio usuário
+    @MessageMapping("/orders/cancel")
+    @SendToUser(destinations = "/queue/orders", broadcast = false)
+    public MarketEvent<OrderResult> cancel(OrderStatusMessage message, SimpMessageHeaderAccessor headers) {
+        String userId = users.resolve(headers);
+        String orderId = message != null ? message.orderId() : null;
+
+        return orderService.cancelOrder(orderId, userId)
+                .map(order -> {
+                    if (order.status() == OrderStatus.CANCELLED) {
+                        return event("ORDER_CANCELLED", order.clientOrderId(), OrderResult.of(order));
+                    }
+                    return event("ORDER_CANCEL_REJECTED", order.clientOrderId(), OrderResult.of(order));
+                })
+                .orElseGet(() -> event("ORDER_CANCEL_REJECTED", orderId,
+                        new OrderResult(orderId, null, null, null, null, null, OrderStatus.REJECTED, RejectReason.INVALID_FIELDS)));
+    }
+
+    //snapshot do livro de ofertas de um ativo
+    @MessageMapping("/orderbook/snapshot")
+    @SendToUser(destinations = "/queue/replies", broadcast = false)
+    public MarketEvent<Map<String, Object>> orderBookSnapshot(Map<String, String> payload) {
+        String symbol = payload != null && payload.get("symbol") != null ? payload.get("symbol") : "PETR4";
+        return event("ORDER_BOOK_SNAPSHOT", symbol, matchingEngine.getBookSnapshot(symbol));
     }
 
     //historico de ordens do user, ordenada das mais antigas para as mais recentes

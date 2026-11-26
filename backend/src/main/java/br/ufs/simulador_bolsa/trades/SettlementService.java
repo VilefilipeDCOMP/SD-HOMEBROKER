@@ -3,10 +3,13 @@ package br.ufs.simulador_bolsa.trades;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,10 +17,16 @@ import org.springframework.transaction.annotation.Transactional;
 import br.ufs.simulador_bolsa.auth.entity.User;
 import br.ufs.simulador_bolsa.auth.repository.UserRepository;
 import br.ufs.simulador_bolsa.communication.MarketEvent;
+import br.ufs.simulador_bolsa.communication.MarketEventPublisher;
+import br.ufs.simulador_bolsa.market.AssetCatalog;
 import br.ufs.simulador_bolsa.market.AssetEntity;
 import br.ufs.simulador_bolsa.market.AssetRepository;
+import br.ufs.simulador_bolsa.observability.MarketMetricsService;
 import br.ufs.simulador_bolsa.orders.OrderEntity;
+import br.ufs.simulador_bolsa.orders.OrderPersistenceService;
 import br.ufs.simulador_bolsa.orders.OrderRepository;
+import br.ufs.simulador_bolsa.orders.SettlementPort;
+import br.ufs.simulador_bolsa.orders.Trade;
 import br.ufs.simulador_bolsa.wallet.DatabaseWalletService;
 import br.ufs.simulador_bolsa.wallet.PortfolioEntity;
 import br.ufs.simulador_bolsa.wallet.PortfolioId;
@@ -33,7 +42,7 @@ import lombok.RequiredArgsConstructor;
  */
 @Service
 @RequiredArgsConstructor
-public class SettlementService {
+public class SettlementService implements SettlementPort {
 
     private static final Logger log = LoggerFactory.getLogger(SettlementService.class);
 
@@ -44,6 +53,73 @@ public class SettlementService {
     private final TradeRepository tradeRepository;
     private final DatabaseWalletService walletService;
     private final SimpMessagingTemplate messagingTemplate;
+
+    @Autowired(required = false)
+    private OrderPersistenceService orderPersistenceService;
+
+    @Autowired(required = false)
+    private AssetCatalog assetCatalog;
+
+    @Autowired(required = false)
+    private MarketEventPublisher eventPublisher;
+
+    @Autowired(required = false)
+    private MarketMetricsService metricsService;
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void settle(Trade trade) {
+        long startNanos = System.nanoTime();
+        Long buyDbId = trade.buy().databaseId();
+        Long sellDbId = trade.sell().databaseId();
+
+        if (buyDbId == null && orderPersistenceService != null) {
+            buyDbId = orderPersistenceService.persistOpenOrder(trade.buy());
+        }
+        if (sellDbId == null && orderPersistenceService != null) {
+            sellDbId = orderPersistenceService.persistOpenOrder(trade.sell());
+        }
+
+        if (buyDbId != null && sellDbId != null) {
+            TradeExecutionCommand cmd = new TradeExecutionCommand(
+                    buyDbId,
+                    sellDbId,
+                    trade.buy().symbol(),
+                    (int) trade.quantity(),
+                    trade.price()
+            );
+            TradeEntity saved = settleTrade(cmd);
+            double latencyMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+            if (metricsService != null) {
+                metricsService.recordTradeExecuted(trade.quantity(), trade.price(), latencyMs);
+            }
+            if (assetCatalog != null) {
+                assetCatalog.updatePrice(trade.buy().symbol(), trade.price());
+            }
+            log.info("TRADE_EXECUTED tradeId={} buyOrderId={} sellOrderId={} symbol={} qty={} price={} latencyMs={}",
+                    saved.getId(), trade.buy().orderId(), trade.sell().orderId(),
+                    trade.buy().symbol(), trade.quantity(), trade.price(),
+                    String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
+            broadcastTradeExecuted(saved, trade);
+        }
+    }
+
+    private void broadcastTradeExecuted(TradeEntity saved, Trade trade) {
+        if (eventPublisher == null) return;
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("tradeId", String.valueOf(saved.getId()));
+            payload.put("symbol", trade.buy().symbol());
+            payload.put("quantity", trade.quantity());
+            payload.put("price", trade.price());
+            payload.put("buyerUsername", trade.buy().userId());
+            payload.put("sellerUsername", trade.sell().userId());
+            payload.put("executedAt", Instant.now().toString());
+            eventPublisher.publish("TRADE_EXECUTED", payload);
+        } catch (Exception e) {
+            log.warn("TRADE_BROADCAST_FAILED symbol={}", trade.buy().symbol(), e);
+        }
+    }
 
     /**
      * Executa a liquidação dos dois lados em uma única transação atômica.
@@ -171,10 +247,14 @@ public class SettlementService {
 
         log.info("TRADE_SETTLED tradeId={} symbol={} qty={} price={} buyer={} seller={}",
                 savedTrade.getId(), asset.getTicker(), qty, execPrice, lockedBuyer.getUsername(), lockedSeller.getUsername());
+        log.info("PORTFOLIO_UPDATED tradeId={} buyer={} buyerNewBalance={} buyerNewShares={} buyerAvgPrice={} seller={} sellerNewBalance={} sellerNewShares={}",
+                savedTrade.getId(), lockedBuyer.getUsername(), lockedBuyer.getSaldo(), buyerPortfolio.getQuantidade(), buyerPortfolio.getPrecoMedio(),
+                lockedSeller.getUsername(), lockedSeller.getSaldo(), sellerPortfolio.getQuantidade());
 
         // 9. Notifica ambos os investidores via WebSocket com seus respectivos snapshots atualizados
         notifyWalletUpdate(lockedBuyer.getUsername(), lockedBuyer.getId());
         notifyWalletUpdate(lockedSeller.getUsername(), lockedSeller.getId());
+        log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(), lockedBuyer.getUsername(), lockedSeller.getUsername());
 
         return savedTrade;
     }
@@ -183,7 +263,6 @@ public class SettlementService {
         int remaining = order.getQuantidade() - executedQty;
         if (remaining <= 0) {
             order.setStatus("EXECUTADA");
-            order.setQuantidade(0);
         } else {
             order.setQuantidade(remaining);
         }
