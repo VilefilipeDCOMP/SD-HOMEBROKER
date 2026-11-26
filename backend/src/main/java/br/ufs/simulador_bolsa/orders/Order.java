@@ -24,12 +24,18 @@ public final class Order {
     private final long quantity;
     private final BigDecimal price;
     private final Instant createdAt;
+    private final long createdAtNanos = System.nanoTime();
 
     private volatile OrderStatus status = OrderStatus.RECEIVED;
     private volatile RejectReason rejectReason;
+    private volatile Long databaseId;
 
     public Order(OrderRequest request, long sequenceNumber) {
-        this.orderId = UUID.randomUUID().toString();
+        this(UUID.randomUUID().toString(), request, sequenceNumber, OrderStatus.RECEIVED, null);
+    }
+
+    public Order(String orderId, OrderRequest request, long sequenceNumber, OrderStatus initialStatus, Long databaseId) {
+        this.orderId = orderId != null ? orderId : UUID.randomUUID().toString();
         this.sequenceNumber = sequenceNumber;
         this.userId = request.userId();
         this.clientOrderId = request.clientOrderId();
@@ -38,6 +44,16 @@ public final class Order {
         this.quantity = request.quantity();
         this.price = request.price();
         this.createdAt = Instant.now();
+        this.status = initialStatus != null ? initialStatus : OrderStatus.RECEIVED;
+        this.databaseId = databaseId;
+    }
+
+    public void assignDatabaseId(Long id) {
+        this.databaseId = id;
+    }
+
+    public double elapsedMillis() {
+        return (System.nanoTime() - createdAtNanos) / 1_000_000.0;
     }
 
     public synchronized boolean accept() {
