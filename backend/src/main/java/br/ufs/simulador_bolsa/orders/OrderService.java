@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletionException;
 
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -26,9 +27,6 @@ public class OrderService {
 
     @Autowired(required = false)
     private MarketMetricsService metricsService;
-
-    @Autowired(required = false)
-    private MatchingEngine matchingEngine;
 
     private final Object enqueueLock = new Object();
     private long lastSequence;
@@ -78,36 +76,54 @@ public class OrderService {
                     order.orderId(), order.userId(), order.sequenceNumber(),
                     order.symbol(), order.side(), order.quantity(), order.price());
 
-            //se entrar no if, quer dizer que a fila ta cheia ai rejeita a ordem
+            OrderResult initialResult = OrderResult.of(order);
+
             if (!processor.enqueue(order)) {
                 order.reject(RejectReason.SYSTEM_BUSY);
                 ordersByClientKey.remove(key);
+
                 if (metricsService != null) {
                     metricsService.recordOrderRejected(order.elapsedMillis());
                 }
+
                 log.warn("ORDER_REJECTED orderId={} reason={}", order.orderId(), RejectReason.SYSTEM_BUSY);
+
+                return OrderResult.of(order);
             }
-            //se não entrar, para aqui
-            return OrderResult.of(order);
+
+            return initialResult;
         }
     }
 
     public Optional<Order> cancelOrder(String orderId, String userId) {
         Optional<Order> found = findByIdForUser(orderId, userId);
+
         if (found.isEmpty()) {
             return Optional.empty();
         }
+
         Order order = found.get();
-        boolean cancelled = matchingEngine != null
-                ? matchingEngine.cancelFromBook(order)
-                : order.cancel();
-        if (cancelled) {
+
+        try {
+            boolean cancelled = processor.enqueueCancel(order).join();
+
+            if (!cancelled) {
+                return Optional.empty();
+            }
+
             if (metricsService != null) {
                 metricsService.recordOrderCancelled();
             }
+
             log.info("ORDER_CANCELLED orderId={} userId={} symbol={}", order.orderId(), userId, order.symbol());
+
+            return Optional.of(order);
+
+        } catch (CompletionException e) {
+            log.warn("ORDER_CANCEL_FAILED orderId={} userId={}", orderId, userId, e);
+
+            return Optional.empty();
         }
-        return Optional.of(order);
     }
 
     public void registerRecoveredOrder(Order recovered) {
