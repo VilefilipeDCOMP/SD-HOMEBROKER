@@ -35,4 +35,36 @@ public class OrderBook {
     private NavigableMap<BigDecimal, Deque<Order>> sideOf(OrderSide side) {
         return side == OrderSide.BUY ? bids : asks;
     }
+
+    public Map<String, Object> toSnapshot(String symbol) {
+        List<Map<String, Object>> bidLevels = aggregateLevels(bids);
+        List<Map<String, Object>> askLevels = aggregateLevels(asks);
+        BigDecimal bestBid = bids.isEmpty() ? null : bids.firstKey();
+        BigDecimal bestAsk = asks.isEmpty() ? null : asks.firstKey();
+
+        Map<String, Object> snap = new LinkedHashMap<>();
+        snap.put("symbol", symbol);
+        snap.put("bids", bidLevels);
+        snap.put("asks", askLevels);
+        snap.put("bestBid", bestBid);
+        snap.put("bestAsk", bestAsk);
+        return snap;
+    }
+
+    private List<Map<String, Object>> aggregateLevels(NavigableMap<BigDecimal, Deque<Order>> sideMap) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (var entry : sideMap.entrySet()) {
+            long totalQty = 0;
+            for (Order o : entry.getValue()) {
+                totalQty += o.remainingQuantity();
+            }
+            if (totalQty > 0) {
+                Map<String, Object> level = new LinkedHashMap<>();
+                level.put("price", entry.getKey());
+                level.put("quantity", totalQty);
+                result.add(level);
+            }
+        }
+        return result;
+    }
 }
