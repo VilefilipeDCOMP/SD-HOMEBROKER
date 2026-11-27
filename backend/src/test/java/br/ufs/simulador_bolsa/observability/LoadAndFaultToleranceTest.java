@@ -18,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +33,7 @@ import br.ufs.simulador_bolsa.orders.MatchingEngine;
 import br.ufs.simulador_bolsa.orders.Order;
 import br.ufs.simulador_bolsa.orders.OrderEntity;
 import br.ufs.simulador_bolsa.orders.OrderPersistenceService;
+import br.ufs.simulador_bolsa.orders.OrderProcessor;
 import br.ufs.simulador_bolsa.orders.OrderRecoveryRunner;
 import br.ufs.simulador_bolsa.orders.OrderRepository;
 import br.ufs.simulador_bolsa.orders.OrderRequest;
@@ -39,6 +41,7 @@ import br.ufs.simulador_bolsa.orders.OrderResult;
 import br.ufs.simulador_bolsa.orders.OrderService;
 import br.ufs.simulador_bolsa.orders.OrderSide;
 import br.ufs.simulador_bolsa.orders.OrderStatus;
+import br.ufs.simulador_bolsa.trades.TradeRepository;
 import br.ufs.simulador_bolsa.wallet.DatabaseWalletService;
 import br.ufs.simulador_bolsa.wallet.PortfolioEntity;
 import br.ufs.simulador_bolsa.wallet.PortfolioId;
@@ -66,10 +69,16 @@ class LoadAndFaultToleranceTest {
     private OrderRepository orderRepository;
 
     @Autowired
+    private TradeRepository tradeRepository;
+
+    @Autowired
     private OrderPersistenceService persistenceService;
 
     @Autowired
     private OrderService orderService;
+
+    @Autowired
+    private OrderProcessor orderProcessor;
 
     @Autowired
     private MatchingEngine matchingEngine;
@@ -82,6 +91,19 @@ class LoadAndFaultToleranceTest {
 
     @Autowired
     private ObservabilityController observabilityController;
+
+    @BeforeEach
+    void isolateScenarioState() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (orderProcessor.pendingCount() > 0 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        matchingEngine.clearBooks();
+        orderService.clearInMemoryOrders();
+        walletService.clearInMemoryReservations();
+        tradeRepository.deleteAllInBatch();
+        orderRepository.deleteAllInBatch();
+    }
 
     private void grantShares(String username, String ticker, int quantity, BigDecimal avgPrice) {
         User user = userRepository.findByUsername(username).orElseThrow();
@@ -128,6 +150,17 @@ class LoadAndFaultToleranceTest {
                 + " (atual=" + (current != null ? current.status() : "null") + ")");
     }
 
+    private void awaitExpectedTradesPersisted(long tradesBefore, int expectedNewTrades) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (System.nanoTime() < deadline) {
+            long currentNewTrades = tradeRepository.count() - tradesBefore;
+            if (orderProcessor.pendingCount() == 0 && currentNewTrades >= expectedNewTrades) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+    }
+
     @Test
     void crashRecoveryRestoresOpenOrdersAndExecutesPostRecoveryTrade() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
@@ -152,7 +185,7 @@ class LoadAndFaultToleranceTest {
 
         Map<String, Object> recoveryReport = recoveryRunner.simulateCrashAndRecover();
         assertEquals("RECOVERED", recoveryReport.get("status"));
-        assertTrue(((Number) recoveryReport.get("totalRecoveredOrders")).intValue() >= 1);
+        assertEquals(1, ((Number) recoveryReport.get("totalRecoveredOrders")).intValue());
 
         assertEquals(0, new BigDecimal("9650.00").compareTo(walletService.getAvailableBalance(buyerName)));
         assertEquals(0, new BigDecimal("350.00").compareTo(walletService.getReservedBalance(buyerName)));
@@ -183,6 +216,7 @@ class LoadAndFaultToleranceTest {
         for (int usersCount : scenarios) {
             ScenarioMetric m = runLoadScenario(usersCount);
             assertEquals(m.users, m.processedOrders);
+            assertEquals(usersCount / 2, m.tradesExecuted);
             assertTrue(m.throughputOrdersPerSec > 0);
         }
 
@@ -196,12 +230,16 @@ class LoadAndFaultToleranceTest {
     private ScenarioMetric runLoadScenario(int concurrentUsers) throws Exception {
         String runTag = "load" + concurrentUsers + "_" + UUID.randomUUID().toString().substring(0, 6);
         List<String> usernames = new ArrayList<>(concurrentUsers);
+        String symbol = "VALE3";
+
+        matchingEngine.clearBooks();
+        long tradesBefore = tradeRepository.count();
 
         for (int i = 0; i < concurrentUsers; i++) {
             String u = runTag + "_u" + i;
             authService.register(u, "pass123");
             if (i % 2 == 0) {
-                grantShares(u, "VALE3", 100, new BigDecimal("65.00"));
+                grantShares(u, symbol, 100, new BigDecimal("65.00"));
             }
             usernames.add(u);
         }
@@ -224,7 +262,7 @@ class LoadAndFaultToleranceTest {
                     OrderResult ack = orderService.submit(new OrderRequest(
                             user,
                             "cid-" + runTag + "-" + idx,
-                            "VALE3",
+                            symbol,
                             side,
                             5L,
                             new BigDecimal("68.00")
@@ -243,8 +281,12 @@ class LoadAndFaultToleranceTest {
             for (Future<Double> f : futures) {
                 latencies.add(f.get(30, TimeUnit.SECONDS));
             }
+            awaitExpectedTradesPersisted(tradesBefore, concurrentUsers / 2);
+
             long totalElapsedNanos = System.nanoTime() - batchStartNanos;
             double totalElapsedSec = Math.max(0.001, totalElapsedNanos / 1_000_000_000.0);
+
+            int persistedTrades = Math.toIntExact(tradeRepository.count() - tradesBefore);
 
             Collections.sort(latencies);
             double min = latencies.getFirst();
@@ -257,12 +299,11 @@ class LoadAndFaultToleranceTest {
             Runtime rt = Runtime.getRuntime();
             double heapMb = (rt.totalMemory() - rt.freeMemory()) / (1024.0 * 1024.0);
 
-            int matchedPairs = concurrentUsers / 2;
             log.info("LOAD_SCENARIO_COMPLETED users={} orders={} trades={} minMs={} avgMs={} maxMs={} p95Ms={} throughputOrdSec={} heapMb={}",
-                    concurrentUsers, concurrentUsers, matchedPairs,
+                    concurrentUsers, concurrentUsers, persistedTrades,
                     fmt(min), fmt(avg), fmt(max), fmt(p95), fmt(throughput), fmt(heapMb));
 
-            return new ScenarioMetric(concurrentUsers, concurrentUsers, matchedPairs, min, avg, max, p95, throughput, heapMb);
+            return new ScenarioMetric(concurrentUsers, concurrentUsers, persistedTrades, min, avg, max, p95, throughput, heapMb);
         } finally {
             pool.shutdownNow();
         }
