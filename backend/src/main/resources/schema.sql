@@ -44,8 +44,11 @@ CREATE TABLE IF NOT EXISTS ordens (
     ativo_id BIGINT NOT NULL REFERENCES ativos(id) ON DELETE RESTRICT,
     tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('COMPRA', 'VENDA')),
     quantidade INT NOT NULL CHECK (quantidade >= 0),
+    quantidade_executada INT NOT NULL DEFAULT 0 CHECK (quantidade_executada >= 0),
     preco_alvo NUMERIC(15, 2) NOT NULL CHECK (preco_alvo > 0),
     status VARCHAR(20) NOT NULL DEFAULT 'ABERTA' CHECK (status IN ('ABERTA', 'EXECUTADA', 'CANCELADA')),
+    client_order_id VARCHAR(64),
+    order_id VARCHAR(64),
     criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -58,3 +61,39 @@ CREATE TABLE IF NOT EXISTS historico_negociacoes (
     preco_executado NUMERIC(15, 2) NOT NULL CHECK (preco_executado > 0),
     executado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE ordens ADD COLUMN IF NOT EXISTS client_order_id VARCHAR(64);
+ALTER TABLE ordens ADD COLUMN IF NOT EXISTS order_id VARCHAR(64);
+ALTER TABLE ordens ADD COLUMN IF NOT EXISTS quantidade_executada INT DEFAULT 0;
+
+
+UPDATE ordens
+   SET quantidade_executada = COALESCE((
+           SELECT SUM(h.quantidade_executada)
+             FROM historico_negociacoes h
+            WHERE h.ordem_compra_id = ordens.id
+               OR h.ordem_venda_id = ordens.id
+       ), 0)
+ WHERE client_order_id IS NULL;
+
+
+UPDATE ordens
+   SET client_order_id = '__legacy__' || CAST(id AS VARCHAR)
+ WHERE client_order_id IS NULL;
+
+UPDATE ordens
+   SET order_id = '__legacy-db__' || CAST(id AS VARCHAR)
+ WHERE order_id IS NULL;
+
+ALTER TABLE ordens ALTER COLUMN client_order_id SET NOT NULL;
+ALTER TABLE ordens ALTER COLUMN order_id SET NOT NULL;
+ALTER TABLE ordens ALTER COLUMN quantidade_executada SET NOT NULL;
+
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ordens_usuario_client_order_id
+    ON ordens (usuario_id, client_order_id);
+
+CREATE INDEX IF NOT EXISTS ix_ordens_status_criado_em
+    ON ordens (status, criado_em);
+CREATE INDEX IF NOT EXISTS ix_ordens_usuario_criado_em
+    ON ordens (usuario_id, criado_em);

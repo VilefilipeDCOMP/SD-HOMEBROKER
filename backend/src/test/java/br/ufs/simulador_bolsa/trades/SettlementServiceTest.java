@@ -14,17 +14,32 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronizationUtils;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import br.ufs.simulador_bolsa.auth.entity.User;
 import br.ufs.simulador_bolsa.auth.repository.UserRepository;
 import br.ufs.simulador_bolsa.market.AssetEntity;
 import br.ufs.simulador_bolsa.market.AssetRepository;
+import br.ufs.simulador_bolsa.observability.MarketMetricsService;
+import br.ufs.simulador_bolsa.orders.Order;
 import br.ufs.simulador_bolsa.orders.OrderEntity;
 import br.ufs.simulador_bolsa.orders.OrderRepository;
+import br.ufs.simulador_bolsa.orders.OrderRequest;
+import br.ufs.simulador_bolsa.orders.OrderSide;
+import br.ufs.simulador_bolsa.orders.OrderStatus;
+import br.ufs.simulador_bolsa.orders.Trade;
 import br.ufs.simulador_bolsa.wallet.DatabaseWalletService;
 import br.ufs.simulador_bolsa.wallet.PortfolioEntity;
 import br.ufs.simulador_bolsa.wallet.PortfolioRepository;
+import br.ufs.simulador_bolsa.wallet.ReservationReconciler;
 
 @ExtendWith(MockitoExtension.class)
 class SettlementServiceTest {
@@ -49,6 +64,9 @@ class SettlementServiceTest {
 
     @Mock
     private SimpMessagingTemplate messagingTemplate;
+
+    @Mock
+    private ReservationReconciler reservationReconciler;
 
     @InjectMocks
     private SettlementService settlementService;
@@ -152,11 +170,11 @@ class SettlementServiceTest {
 
         // Devolução da reserva de sobra:
         // O comprador reservou 10 * 36.00 = 360.00
-        verify(walletService).releaseFunds("1", new BigDecimal("360.00"));
+        verify(walletService).releaseFunds("comprador", new BigDecimal("360.00"));
 
         // Custódia vendedor: tinha 20, vendeu 10 -> sobram 10
         assertEquals(10, sellerPortfolio.getQuantidade());
-        verify(walletService).releaseShares("2", "PETR4", 10);
+        verify(walletService).releaseShares("vendedor", "PETR4", 10);
 
         // Preço Médio ponderado do comprador:
         // Antigo: 10 @ 30.00 = 300.00
@@ -212,6 +230,120 @@ class SettlementServiceTest {
         // Como a transação falhou antes do commit, a liberação de fundos/ações NÃO deve ocorrer
         verify(walletService, never()).releaseFunds(anyString(), any(BigDecimal.class));
         verify(walletService, never()).releaseShares(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("Falha na liberação após commit deve agendar reconciliação sem abortar as demais liberações")
+    void testFailedReleaseSchedulesReconciliation() {
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(buyOrder));
+        when(orderRepository.findById(200L)).thenReturn(Optional.of(sellOrder));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(buyer));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(seller));
+        when(assetRepository.findByTicker("PETR4")).thenReturn(Optional.of(petr4));
+
+        when(portfolioRepository.findByUsuarioIdAndTicker(2L, "PETR4"))
+                .thenReturn(Optional.of(PortfolioEntity.builder()
+                        .usuario(seller).ativo(petr4).quantidade(20)
+                        .precoMedio(new BigDecimal("30.00")).build()));
+        when(portfolioRepository.findByUsuarioIdAndTicker(1L, "PETR4"))
+                .thenReturn(Optional.of(PortfolioEntity.builder()
+                        .usuario(buyer).ativo(petr4).quantidade(10)
+                        .precoMedio(new BigDecimal("30.00")).build()));
+        when(tradeRepository.save(any(TradeEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        doThrow(new RuntimeException("RELEASE_FAILURE"))
+                .when(walletService).releaseFunds("comprador", new BigDecimal("360.00"));
+
+        TradeExecutionCommand cmd = new TradeExecutionCommand(
+                100L, 200L, "PETR4", 10, new BigDecimal("34.00"));
+
+        assertNotNull(settlementService.settleTrade(cmd));
+
+        verify(reservationReconciler).enqueue(eq("FUNDS"), eq("comprador"), any());
+        verify(reservationReconciler, never()).enqueue(eq("SHARES"), anyString(), any());
+        verify(walletService).releaseShares("vendedor", "PETR4", 10);
+    }
+
+    @Test
+    @DisplayName("Negociação confirmada gera log TRADE_EXECUTED e métrica somente após o commit")
+    void executedLogAndMetricAreRegisteredOnlyAfterCommit() {
+        MarketMetricsService metrics = mock(MarketMetricsService.class);
+        SettlementService service = settlementSpyWith(metrics);
+        Logger logger = (Logger) LoggerFactory.getLogger(SettlementService.class);
+        ListAppender<ILoggingEvent> appender = attachAppender(logger);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.settle(persistedTrade());
+
+            assertTrue(noTradeExecutedLog(appender));
+            verify(metrics, never()).recordTradeExecuted(anyLong(), any(BigDecimal.class), anyDouble());
+
+            TransactionSynchronizationUtils.triggerAfterCommit();
+
+            assertFalse(noTradeExecutedLog(appender));
+            verify(metrics).recordTradeExecuted(eq(10L), eq(new BigDecimal("34.00")), anyDouble());
+        } finally {
+            logger.detachAppender(appender);
+            clearSynchronizationIfActive();
+        }
+    }
+
+    @Test
+    @DisplayName("Rollback da liquidação não gera log TRADE_EXECUTED nem incrementa a métrica")
+    void rollbackNeitherLogsTradeExecutedNorRecordsMetric() {
+        MarketMetricsService metrics = mock(MarketMetricsService.class);
+        SettlementService service = settlementSpyWith(metrics);
+        Logger logger = (Logger) LoggerFactory.getLogger(SettlementService.class);
+        ListAppender<ILoggingEvent> appender = attachAppender(logger);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.settle(persistedTrade());
+            // rollback: descarta as sincronizações sem disparar afterCommit
+            TransactionSynchronizationManager.clearSynchronization();
+
+            assertTrue(noTradeExecutedLog(appender));
+            verify(metrics, never()).recordTradeExecuted(anyLong(), any(BigDecimal.class), anyDouble());
+        } finally {
+            logger.detachAppender(appender);
+            clearSynchronizationIfActive();
+        }
+    }
+
+    private SettlementService settlementSpyWith(MarketMetricsService metrics) {
+        SettlementService spy = spy(settlementService);
+        ReflectionTestUtils.setField(spy, "metricsService", metrics);
+        doReturn(TradeEntity.builder().id(99L).build()).when(spy).settleTrade(any(TradeExecutionCommand.class));
+        return spy;
+    }
+
+    private static Trade persistedTrade() {
+        Order buy = new Order("buy-original",
+                new OrderRequest("comprador", "cid-b", "PETR4", OrderSide.BUY, 10L, new BigDecimal("34.00")),
+                1L, OrderStatus.ACCEPTED, 100L);
+        Order sell = new Order("sell-original",
+                new OrderRequest("vendedor", "cid-s", "PETR4", OrderSide.SELL, 10L, new BigDecimal("34.00")),
+                2L, OrderStatus.ACCEPTED, 200L);
+        return new Trade(buy, sell, 10, new BigDecimal("34.00"));
+    }
+
+    private static ListAppender<ILoggingEvent> attachAppender(Logger logger) {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private static boolean noTradeExecutedLog(ListAppender<ILoggingEvent> appender) {
+        return appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                .noneMatch(message -> message.startsWith("TRADE_EXECUTED"));
+    }
+
+    private static void clearSynchronizationIfActive() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

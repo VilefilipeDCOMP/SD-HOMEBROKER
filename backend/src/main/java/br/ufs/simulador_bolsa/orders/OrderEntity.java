@@ -55,6 +55,16 @@ public class OrderEntity {
     @Column(nullable = false, length = 20)
     private String status; // 'ABERTA', 'EXECUTADA', 'CANCELADA'
 
+    @Builder.Default
+    @Column(name = "quantidade_executada", nullable = false)
+    private Integer quantidadeExecutada = 0;
+
+    @Column(name = "client_order_id", nullable = false, length = 64)
+    private String clientOrderId;
+
+    @Column(name = "order_id", nullable = false, length = 64)
+    private String orderId;
+
     @Column(name = "criado_em", nullable = false, updatable = false)
     private LocalDateTime criadoEm;
 
@@ -65,6 +75,15 @@ public class OrderEntity {
         }
         if (this.status == null) {
             this.status = "ABERTA";
+        }
+        if (this.quantidadeExecutada == null) {
+            this.quantidadeExecutada = 0;
+        }
+        if (this.clientOrderId == null) {
+            this.clientOrderId = "__legacy__" + java.util.UUID.randomUUID();
+        }
+        if (this.orderId == null) {
+            this.orderId = "__legacy-db__" + java.util.UUID.randomUUID();
         }
     }
 }

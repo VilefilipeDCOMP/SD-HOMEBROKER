@@ -61,29 +61,38 @@ public class OrderRecoveryRunner {
             String username = entity.getUsuario().getUsername();
             String ticker = entity.getAtivo().getTicker();
             OrderSide side = "VENDA".equalsIgnoreCase(entity.getTipo()) ? OrderSide.SELL : OrderSide.BUY;
-            long qty = entity.getQuantidade();
+
+            long remaining = entity.getQuantidade() == null ? 0L : entity.getQuantidade().longValue();
+            long executed = entity.getQuantidadeExecutada() == null ? 0L : entity.getQuantidadeExecutada().longValue();
+            if (remaining <= 0) {
+                continue; // já executada; não volta para o book
+            }
+
             BigDecimal price = entity.getPrecoAlvo();
 
-            log.info("ORDER_RECOVERED id={} user={} asset={} side={} qty={} targetPrice={}",
-                    entity.getId(),
-                    username,
-                    ticker,
-                    entity.getTipo(),
-                    qty,
-                    price);
+            log.info("ORDER_RECOVERED dbId={} orderId={} clientOrderId={} user={} asset={} side={} qtyTotal={} qtyExecuted={} qtyRemaining={} targetPrice={}",
+                    entity.getId(), entity.getOrderId(), entity.getClientOrderId(), username, ticker,
+                    entity.getTipo(), remaining + executed, executed, remaining, price);
 
+            // Reserva somente o saldo ainda não executado.
             boolean reserved = side == OrderSide.BUY
-                    ? walletService.reserveFunds(username, price.multiply(BigDecimal.valueOf(qty)))
-                    : walletService.reserveShares(username, ticker, qty);
+                    ? walletService.reserveFunds(username, price.multiply(BigDecimal.valueOf(remaining)))
+                    : walletService.reserveShares(username, ticker, remaining);
 
             if (!reserved) {
+                log.warn("ORDER_RECOVERY_RESERVE_FAILED dbId={} user={} remaining={}", entity.getId(), username, remaining);
                 continue;
             }
 
-            String clientOrderId = "recovered-" + entity.getId();
-            OrderRequest req = new OrderRequest(username, clientOrderId, ticker, side, qty, price);
+            // A entidade guarda o saldo/restante. O Order em memória é recriado somente
+            // com esse saldo; o progresso já executado permanece no banco para auditoria.
+            String orderId = entity.getOrderId() != null ? entity.getOrderId() : "db-" + entity.getId();
+            String clientOrderId = entity.getClientOrderId() != null
+                    ? entity.getClientOrderId()
+                    : "recovered-" + entity.getId();
+            OrderRequest req = new OrderRequest(username, clientOrderId, ticker, side, remaining, price);
             Order recoveredOrder = new Order(
-                    "db-" + entity.getId(),
+                    orderId,
                     req,
                     orderService.nextSequenceNumber(),
                     OrderStatus.ACCEPTED,
@@ -96,10 +105,13 @@ public class OrderRecoveryRunner {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("dbId", entity.getId());
             item.put("orderId", recoveredOrder.orderId());
+            item.put("clientOrderId", recoveredOrder.clientOrderId());
             item.put("user", username);
             item.put("asset", ticker);
             item.put("side", entity.getTipo());
-            item.put("quantity", qty);
+            item.put("quantity", remaining);
+            item.put("executedQuantity", executed);
+            item.put("remainingQuantity", remaining);
             item.put("targetPrice", price);
             recoveredDetails.add(item);
         }

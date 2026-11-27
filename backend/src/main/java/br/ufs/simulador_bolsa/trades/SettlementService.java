@@ -33,15 +33,10 @@ import br.ufs.simulador_bolsa.wallet.DatabaseWalletService;
 import br.ufs.simulador_bolsa.wallet.PortfolioEntity;
 import br.ufs.simulador_bolsa.wallet.PortfolioId;
 import br.ufs.simulador_bolsa.wallet.PortfolioRepository;
+import br.ufs.simulador_bolsa.wallet.ReservationReconciler;
 import br.ufs.simulador_bolsa.wallet.WalletSnapshot;
 import lombok.RequiredArgsConstructor;
 
-/**
- * Serviço de liquidação bilateral atômica (ACID).
- * Efetiva a transação entre comprador e vendedor em uma única operação de banco de dados.
- * Gerencia a prevenção de deadlock (ordenação canônica por ID), cálculo ponderado do preço médio
- * e devolução imediata da sobra da reserva de compra.
- */
 @Service
 @RequiredArgsConstructor
 public class SettlementService implements SettlementPort {
@@ -54,6 +49,7 @@ public class SettlementService implements SettlementPort {
     private final PortfolioRepository portfolioRepository;
     private final TradeRepository tradeRepository;
     private final DatabaseWalletService walletService;
+    private final ReservationReconciler reservationReconciler;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Autowired(required = false)
@@ -91,10 +87,7 @@ public class SettlementService implements SettlementPort {
                     trade.price()
             );
             TradeEntity saved = settleTrade(cmd);
-            double latencyMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-            if (metricsService != null) {
-                metricsService.recordTradeExecuted(trade.quantity(), trade.price(), latencyMs);
-            }
+            final double latencyMs = (System.nanoTime() - startNanos) / 1_000_000.0;
 
             long resolvedVolume = trade.quantity();
             if (tradeRepository != null) {
@@ -105,22 +98,34 @@ public class SettlementService implements SettlementPort {
             }
             final long totalVolume = resolvedVolume;
 
-            log.info("TRADE_EXECUTED tradeId={} buyOrderId={} sellOrderId={} symbol={} qty={} price={} volume={} latencyMs={}",
-                    saved.getId(), trade.buy().orderId(), trade.sell().orderId(),
-                    trade.buy().symbol(), trade.quantity(), trade.price(), totalVolume,
-                    String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
+            Runnable publicarAposCommit = () -> {
+                log.info("TRADE_EXECUTED tradeId={} buyOrderId={} sellOrderId={} symbol={} qty={} price={} volume={} latencyMs={}",
+                        saved.getId(), trade.buy().orderId(), trade.sell().orderId(),
+                        trade.buy().symbol(), trade.quantity(), trade.price(), totalVolume,
+                        String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
+
+                atualizarCatalogoAposNegocio(trade, totalVolume);
+                broadcastTradeExecuted(saved, trade, totalVolume);
+
+                // Somente negociações efetivamente commitadas entram na métrica.
+                if (metricsService != null) {
+                    try {
+                        metricsService.recordTradeExecuted(trade.quantity(), trade.price(), latencyMs);
+                    } catch (RuntimeException e) {
+                        log.warn("TRADE_METRIC_FAILED symbol={}", trade.buy().symbol(), e);
+                    }
+                }
+            };
 
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        atualizarCatalogoAposNegocio(trade, totalVolume);
-                        broadcastTradeExecuted(saved, trade, totalVolume);
+                        publicarAposCommit.run();
                     }
                 });
             } else {
-                atualizarCatalogoAposNegocio(trade, totalVolume);
-                broadcastTradeExecuted(saved, trade, totalVolume);
+                publicarAposCommit.run();
             }
         } else {
             log.error("SETTLEMENT_REJECTED_MISSING_PERSISTED_ID buyOrderId={} buyDbId={} sellOrderId={} sellDbId={}",
@@ -156,15 +161,11 @@ public class SettlementService implements SettlementPort {
         }
     }
 
-    /**
-     * Executa a liquidação dos dois lados em uma única transação atômica.
-     */
     @Transactional(rollbackFor = Exception.class)
     public TradeEntity settleTrade(TradeExecutionCommand command) {
         log.info("SETTLEMENT_STARTED buyOrderId={} sellOrderId={} symbol={} qty={} price={}",
                 command.buyOrderId(), command.sellOrderId(), command.symbol(), command.quantity(), command.executedPrice());
 
-        // 1. Carrega as ordens
         OrderEntity buyOrder = orderRepository.findById(command.buyOrderId())
                 .orElseThrow(() -> new IllegalArgumentException("Ordem de compra não encontrada: " + command.buyOrderId()));
         OrderEntity sellOrder = orderRepository.findById(command.sellOrderId())
@@ -177,7 +178,7 @@ public class SettlementService implements SettlementPort {
             throw new IllegalStateException("Autonegociação rejeitada: o mesmo usuário não pode comprar e vender para si mesmo");
         }
 
-        // 2. Prevenção de Deadlock: ordenação canônica por ID de usuário ao consultar/atualizar
+        // Ordenação canônica por ID evita deadlock entre as duas contas.
         User firstLockUser;
         User secondLockUser;
         if (buyer.getId() < seller.getId()) {
@@ -191,7 +192,6 @@ public class SettlementService implements SettlementPort {
         User lockedBuyer = buyer.getId().equals(firstLockUser.getId()) ? firstLockUser : secondLockUser;
         User lockedSeller = seller.getId().equals(firstLockUser.getId()) ? firstLockUser : secondLockUser;
 
-        // 3. Carrega o ativo
         AssetEntity asset = assetRepository.findByTicker(command.symbol().toUpperCase())
                 .orElseThrow(() -> new IllegalArgumentException("Ativo não encontrado: " + command.symbol()));
 
@@ -199,26 +199,21 @@ public class SettlementService implements SettlementPort {
         BigDecimal execPrice = command.executedPrice();
         BigDecimal totalFinancial = execPrice.multiply(BigDecimal.valueOf(qty));
 
-        // 4. Devolução da sobra de reserva do comprador e liberação de reservas
-        // O comprador reservou com base no precoAlvo da ordem
+        // A reserva usou o preço alvo; se executou mais barato, a sobra volta ao disponível.
         BigDecimal targetPrice = buyOrder.getPrecoAlvo();
         BigDecimal reservedPerShare = targetPrice != null ? targetPrice : execPrice;
         BigDecimal totalReservedForExecution = reservedPerShare.multiply(BigDecimal.valueOf(qty));
 
-        // Se o preço executado foi menor que o preço alvo da ordem, a diferença (sobra) volta pro disponível
         BigDecimal refundRemainder = totalReservedForExecution.subtract(totalFinancial);
         if (refundRemainder.signum() > 0) {
             log.info("RESERVATION_SURPLUS_REFUNDED buyerId={} refundAmount={}", lockedBuyer.getId(), refundRemainder);
         }
 
-        // Débito financeiro real do comprador e crédito no vendedor
         lockedBuyer.setSaldo(lockedBuyer.getSaldo().subtract(totalFinancial));
         lockedSeller.setSaldo(lockedSeller.getSaldo().add(totalFinancial));
         userRepository.save(lockedBuyer);
         userRepository.save(lockedSeller);
 
-        // 5. Transferência de custódia e cálculo do Preço Médio Ponderado
-        // Vendedor: debita da carteira
         PortfolioEntity sellerPortfolio = portfolioRepository.findByUsuarioIdAndTicker(lockedSeller.getId(), asset.getTicker())
                 .orElseThrow(() -> new IllegalStateException("Carteira do vendedor não encontrada para o ativo: " + asset.getTicker()));
 
@@ -232,7 +227,6 @@ public class SettlementService implements SettlementPort {
         }
         portfolioRepository.save(sellerPortfolio);
 
-        // Comprador: credita ações e calcula novo Preço Médio
         PortfolioEntity buyerPortfolio = portfolioRepository.findByUsuarioIdAndTicker(lockedBuyer.getId(), asset.getTicker())
                 .orElseGet(() -> {
                     PortfolioEntity p = new PortfolioEntity();
@@ -256,17 +250,14 @@ public class SettlementService implements SettlementPort {
         buyerPortfolio.setPrecoMedio(newAvgPrice);
         portfolioRepository.save(buyerPortfolio);
 
-        // 6. Atualização de status das ordens
         updateOrderStatus(buyOrder, qty);
         updateOrderStatus(sellOrder, qty);
         orderRepository.save(buyOrder);
         orderRepository.save(sellOrder);
 
-        // 7. Atualiza preço de mercado do ativo
         asset.setPrecoAtual(execPrice);
         assetRepository.save(asset);
 
-        // 8. Persiste no histórico de negociações
         TradeEntity trade = TradeEntity.builder()
                 .ordemCompra(buyOrder)
                 .ordemVenda(sellOrder)
@@ -282,41 +273,64 @@ public class SettlementService implements SettlementPort {
                 savedTrade.getId(), lockedBuyer.getUsername(), lockedBuyer.getSaldo(), buyerPortfolio.getQuantidade(), buyerPortfolio.getPrecoMedio(),
                 lockedSeller.getUsername(), lockedSeller.getSaldo(), sellerPortfolio.getQuantidade());
 
-        // 9. Liberação de reservas em memória e notificações (apenas após o commit bem-sucedido)
+        Runnable liberarAposCommit = () -> concluirLiberacaoAposCommit(
+                savedTrade, lockedBuyer, lockedSeller, asset.getTicker(), totalReservedForExecution, qty);
+
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    walletService.releaseFunds(String.valueOf(lockedBuyer.getId()), totalReservedForExecution);
-                    walletService.releaseShares(String.valueOf(lockedSeller.getId()), asset.getTicker(), qty);
-                    notifyWalletUpdate(lockedBuyer.getUsername(), lockedBuyer.getId());
-                    notifyWalletUpdate(lockedSeller.getUsername(), lockedSeller.getId());
-                    log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(), lockedBuyer.getUsername(), lockedSeller.getUsername());
+                    liberarAposCommit.run();
                 }
             });
         } else {
-            walletService.releaseFunds(String.valueOf(lockedBuyer.getId()), totalReservedForExecution);
-            walletService.releaseShares(String.valueOf(lockedSeller.getId()), asset.getTicker(), qty);
-            notifyWalletUpdate(lockedBuyer.getUsername(), lockedBuyer.getId());
-            notifyWalletUpdate(lockedSeller.getUsername(), lockedSeller.getId());
-            log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(), lockedBuyer.getUsername(), lockedSeller.getUsername());
+            liberarAposCommit.run();
         }
 
         return savedTrade;
     }
 
+    private void concluirLiberacaoAposCommit(TradeEntity savedTrade, User lockedBuyer, User lockedSeller,
+                                             String symbol, BigDecimal totalReservedForExecution, long qty) {
+        liberarSemVazar("FUNDS", lockedBuyer.getUsername(), lockedBuyer.getId(),
+                () -> walletService.releaseFunds(lockedBuyer.getUsername(), totalReservedForExecution));
+        liberarSemVazar("SHARES", lockedSeller.getUsername(), lockedSeller.getId(),
+                () -> walletService.releaseShares(lockedSeller.getUsername(), symbol, qty));
+
+        notifyWalletUpdate(lockedBuyer.getUsername());
+        notifyWalletUpdate(lockedSeller.getUsername());
+        log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(),
+                lockedBuyer.getUsername(), lockedSeller.getUsername());
+    }
+
+    private void liberarSemVazar(String kind, String username, Long userId, Runnable release) {
+        try {
+            release.run();
+        } catch (RuntimeException e) {
+            // afterCommit não desfaz o commit; jamais deixa uma falha abortar as demais liberações.
+            log.error("RESERVATION_RELEASE_FAILED kind={} userId={} user={}", kind, userId, username, e);
+            if (reservationReconciler != null) {
+                reservationReconciler.enqueue(kind, username, release);
+            }
+        }
+    }
+
     private void updateOrderStatus(OrderEntity order, int executedQty) {
+        int alreadyExecuted = order.getQuantidadeExecutada() == null ? 0 : order.getQuantidadeExecutada();
+        order.setQuantidadeExecutada(alreadyExecuted + executedQty);
+
         int remaining = order.getQuantidade() - executedQty;
         if (remaining <= 0) {
+            order.setQuantidade(0);
             order.setStatus("EXECUTADA");
         } else {
             order.setQuantidade(remaining);
         }
     }
 
-    private void notifyWalletUpdate(String username, Long userId) {
+    private void notifyWalletUpdate(String username) {
         try {
-            WalletSnapshot snapshot = walletService.getSnapshot(String.valueOf(userId));
+            WalletSnapshot snapshot = walletService.getSnapshot(username);
             MarketEvent<WalletSnapshot> event = new MarketEvent<>(
                     "WALLET_UPDATED",
                     UUID.randomUUID().toString(),

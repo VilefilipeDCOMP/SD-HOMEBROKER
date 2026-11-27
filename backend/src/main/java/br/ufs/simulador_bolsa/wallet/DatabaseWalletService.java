@@ -3,6 +3,7 @@ package br.ufs.simulador_bolsa.wallet;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,12 +20,6 @@ import br.ufs.simulador_bolsa.market.AssetEntity;
 import br.ufs.simulador_bolsa.market.AssetRepository;
 import lombok.RequiredArgsConstructor;
 
-/**
- * Implementação da carteira conectada ao PostgreSQL.
- * O saldo persistido e as custódias reais vêm do banco de dados.
- * As reservas ativas (fundos bloqueados por ordens de compra em aberto e ações bloqueadas por ordens de venda)
- * são coordenadas de forma concorrente e thread-safe.
- */
 @Service
 @Primary
 @RequiredArgsConstructor
@@ -36,30 +31,15 @@ public class DatabaseWalletService implements WalletPort {
     private final PortfolioRepository portfolioRepository;
     private final AssetRepository assetRepository;
 
-    // Rastreia reservas ativas em memória com thread-safety
-    // userId -> valor monetário reservado
     private final Map<String, BigDecimal> reservedBalances = new ConcurrentHashMap<>();
-    // userId|symbol -> quantidade de ações reservadas
     private final Map<String, Long> reservedShares = new ConcurrentHashMap<>();
 
-    private Long parseUserId(String userId) {
-        if (userId == null) {
+    /** A identidade canônica é o username; o ID numérico do banco nunca é usado como chave. */
+    private User resolveUser(String username) {
+        if (username == null || username.isBlank()) {
             return null;
         }
-        try {
-            return Long.parseLong(userId);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    private User resolveUser(String userId) {
-        Long id = parseUserId(userId);
-        if (id != null) {
-            Optional<User> byId = userRepository.findById(id);
-            if (byId.isPresent()) return byId.get();
-        }
-        return userRepository.findByUsername(userId).orElse(null);
+        return userRepository.findByUsername(username.trim()).orElse(null);
     }
 
     @Override
@@ -75,22 +55,10 @@ public class DatabaseWalletService implements WalletPort {
         return available.signum() >= 0 ? available : BigDecimal.ZERO;
     }
 
-    public BigDecimal getReservedBalance(String userId) {
-        if (userId == null) return BigDecimal.ZERO;
-        BigDecimal direct = reservedBalances.get(userId);
-        if (direct != null) {
-            return direct;
-        }
-        User user = resolveUser(userId);
-        if (user != null) {
-            BigDecimal byName = reservedBalances.get(user.getUsername());
-            if (byName != null) return byName;
-            if (user.getId() != null) {
-                BigDecimal byId = reservedBalances.get(String.valueOf(user.getId()));
-                if (byId != null) return byId;
-            }
-        }
-        return BigDecimal.ZERO;
+    public BigDecimal getReservedBalance(String username) {
+        if (username == null) return BigDecimal.ZERO;
+        BigDecimal reserved = reservedBalances.get(username);
+        return reserved != null ? reserved : BigDecimal.ZERO;
     }
 
     @Override
@@ -108,75 +76,60 @@ public class DatabaseWalletService implements WalletPort {
         return Math.max(available, 0);
     }
 
-    public long getReservedShares(String userId, String symbol) {
-        if (userId == null || symbol == null) return 0;
-        String sym = symbol.toUpperCase();
-        Long direct = reservedShares.get(userId + "|" + sym);
-        if (direct != null) {
-            return direct;
-        }
-        User user = resolveUser(userId);
-        if (user != null) {
-            Long byName = reservedShares.get(user.getUsername() + "|" + sym);
-            if (byName != null) return byName;
-            if (user.getId() != null) {
-                Long byId = reservedShares.get(user.getId() + "|" + sym);
-                if (byId != null) return byId;
-            }
-        }
-        return 0L;
+    public long getReservedShares(String username, String symbol) {
+        if (username == null || symbol == null) return 0;
+        Long reserved = reservedShares.get(username + "|" + symbol.toUpperCase());
+        return reserved != null ? reserved : 0L;
     }
 
     @Override
-    public synchronized boolean reserveFunds(String userId, BigDecimal amount) {
+    public synchronized boolean reserveFunds(String username, BigDecimal amount) {
         requirePositive(amount);
-        BigDecimal available = getAvailableBalance(userId);
+        BigDecimal available = getAvailableBalance(username);
         if (available.compareTo(amount) >= 0) {
-            String targetKey = findExistingBalanceKey(userId);
-            reservedBalances.merge(targetKey, amount, BigDecimal::add);
-            log.info("FUNDS_RESERVED userId={} amount={} newReserved={}", userId, amount, reservedBalances.get(targetKey));
+            reservedBalances.merge(username, amount, BigDecimal::add);
+            log.info("FUNDS_RESERVED username={} amount={} newReserved={}", username, amount, reservedBalances.get(username));
             return true;
         }
-        log.warn("FUNDS_RESERVE_FAILED userId={} requested={} available={}", userId, amount, available);
+        log.warn("FUNDS_RESERVE_FAILED username={} requested={} available={}", username, amount, available);
         return false;
     }
 
     @Override
-    public synchronized boolean reserveShares(String userId, String symbol, long quantity) {
+    public synchronized boolean reserveShares(String username, String symbol, long quantity) {
         requirePositive(quantity);
         String sym = symbol.toUpperCase();
-        long available = getAvailableShares(userId, sym);
+        long available = getAvailableShares(username, sym);
         if (available >= quantity) {
-            String key = findExistingSharesKey(userId, sym);
+            String key = username + "|" + sym;
             reservedShares.merge(key, quantity, Long::sum);
-            log.info("SHARES_RESERVED userId={} symbol={} quantity={} newReserved={}", userId, sym, quantity, reservedShares.get(key));
+            log.info("SHARES_RESERVED username={} symbol={} quantity={} newReserved={}", username, sym, quantity, reservedShares.get(key));
             return true;
         }
-        log.warn("SHARES_RESERVE_FAILED userId={} symbol={} requested={} available={}", userId, sym, quantity, available);
+        log.warn("SHARES_RESERVE_FAILED username={} symbol={} requested={} available={}", username, sym, quantity, available);
         return false;
     }
 
     @Override
-    public synchronized void releaseFunds(String userId, BigDecimal amount) {
+    public synchronized void releaseFunds(String username, BigDecimal amount) {
         requirePositive(amount);
-        String targetKey = findExistingBalanceKey(userId);
-        reservedBalances.computeIfPresent(targetKey, (k, current) -> {
+        reservedBalances.computeIfPresent(username, (k, current) -> {
             BigDecimal remaining = current.subtract(amount);
             return remaining.signum() > 0 ? remaining : null;
         });
-        log.info("FUNDS_RELEASED userId={} amount={} currentReserved={}", userId, amount, getReservedBalance(userId));
+        log.info("FUNDS_RELEASED username={} amount={} currentReserved={}", username, amount, getReservedBalance(username));
     }
 
     @Override
-    public synchronized void releaseShares(String userId, String symbol, long quantity) {
+    public synchronized void releaseShares(String username, String symbol, long quantity) {
         requirePositive(quantity);
         String sym = symbol.toUpperCase();
-        String key = findExistingSharesKey(userId, sym);
+        String key = username + "|" + sym;
         reservedShares.computeIfPresent(key, (k, current) -> {
             long remaining = current - quantity;
             return remaining > 0 ? remaining : null;
         });
-        log.info("SHARES_RELEASED userId={} symbol={} quantity={} currentReserved={}", userId, sym, quantity, getReservedShares(userId, sym));
+        log.info("SHARES_RELEASED username={} symbol={} quantity={} currentReserved={}", username, sym, quantity, getReservedShares(username, sym));
     }
 
     public synchronized void clearInMemoryReservations() {
@@ -184,47 +137,35 @@ public class DatabaseWalletService implements WalletPort {
         reservedShares.clear();
     }
 
-    private String findExistingBalanceKey(String userId) {
-        if (reservedBalances.containsKey(userId)) {
-            return userId;
+    /** Substitui atomicamente as reservas do usuário; usado pela reconciliação pós-commit. */
+    public synchronized void replaceReservations(String username, BigDecimal funds, Map<String, Long> sharesBySymbol) {
+        if (username == null || username.isBlank()) {
+            return;
         }
-        User user = resolveUser(userId);
-        if (user != null) {
-            if (reservedBalances.containsKey(user.getUsername())) {
-                return user.getUsername();
-            }
-            if (user.getId() != null && reservedBalances.containsKey(String.valueOf(user.getId()))) {
-                return String.valueOf(user.getId());
-            }
-        }
-        return userId;
-    }
 
-    private String findExistingSharesKey(String userId, String sym) {
-        String directKey = userId + "|" + sym;
-        if (reservedShares.containsKey(directKey)) {
-            return directKey;
+        String prefix = username + "|";
+        reservedShares.keySet().removeIf(key -> key.startsWith(prefix));
+
+        if (funds == null || funds.signum() <= 0) {
+            reservedBalances.remove(username);
+        } else {
+            reservedBalances.put(username, funds);
         }
-        User user = resolveUser(userId);
-        if (user != null) {
-            String byName = user.getUsername() + "|" + sym;
-            if (reservedShares.containsKey(byName)) {
-                return byName;
-            }
-            if (user.getId() != null) {
-                String byId = user.getId() + "|" + sym;
-                if (reservedShares.containsKey(byId)) {
-                    return byId;
+
+        if (sharesBySymbol != null) {
+            for (Map.Entry<String, Long> entry : sharesBySymbol.entrySet()) {
+                String symbol = entry.getKey();
+                Long quantity = entry.getValue();
+                if (symbol != null && quantity != null && quantity > 0) {
+                    reservedShares.put(username + "|" + symbol.trim().toUpperCase(Locale.ROOT), quantity);
                 }
             }
         }
-        return directKey;
+
+        log.info("RESERVATIONS_REPLACED user={} funds={} symbols={}", username, funds,
+                sharesBySymbol == null ? List.of() : sharesBySymbol.keySet());
     }
 
-    /**
-     * Retorna o snapshot completo da carteira do usuário (saldo disponível, reservado e posições com preço médio)
-     * exatamente como contratado pelo Home Broker (/app/wallet/me).
-     */
     @Transactional(readOnly = true)
     public WalletSnapshot getSnapshot(String userId) {
         User user = resolveUser(userId);

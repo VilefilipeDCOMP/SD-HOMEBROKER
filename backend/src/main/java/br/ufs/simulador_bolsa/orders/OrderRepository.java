@@ -14,4 +14,8 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
 
     @Query("SELECT o FROM OrderEntity o JOIN FETCH o.ativo WHERE o.usuario.id = :usuarioId ORDER BY o.criadoEm DESC")
     List<OrderEntity> findByUsuarioIdOrderByCriadoEmDesc(@Param("usuarioId") Long usuarioId);
+
+    /** Ordens ainda abertas de um usuário, usadas para recalcular reservas após falha de liberação. */
+    @Query("SELECT o FROM OrderEntity o JOIN FETCH o.ativo WHERE o.usuario.username = :username AND o.status = :status")
+    List<OrderEntity> findOpenOrdersByUsername(@Param("username") String username, @Param("status") String status);
 }

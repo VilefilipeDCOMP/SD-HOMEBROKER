@@ -43,10 +43,10 @@ public class WalletController {
     @MessageMapping("/wallet/me")
     @SendToUser(destinations = "/queue/replies", broadcast = false)
     public MarketEvent<WalletSnapshot> myWallet(SimpMessageHeaderAccessor headers) {
-        String userId = users.resolve(headers);
-        log.info("WALLET_QUERY_REQUESTED userId={}", userId);
+        String username = users.resolve(headers);
+        log.info("WALLET_QUERY_REQUESTED username={}", username);
 
-        WalletSnapshot snapshot = walletService.getSnapshot(userId);
+        WalletSnapshot snapshot = walletService.getSnapshot(username);
 
         return new MarketEvent<>(
                 "WALLET_SNAPSHOT",
@@ -65,16 +65,10 @@ public class WalletController {
     @MessageMapping("/trades/mine")
     @SendToUser(destinations = "/queue/replies", broadcast = false)
     public MarketEvent<List<TradeItemResponse>> myTrades(SimpMessageHeaderAccessor headers) {
-        String userIdStr = users.resolve(headers);
-        log.info("TRADE_HISTORY_REQUESTED userId={}", userIdStr);
+        String username = users.resolve(headers);
+        log.info("TRADE_HISTORY_REQUESTED username={}", username);
 
-        User user = null;
-        try {
-            Long uid = Long.parseLong(userIdStr);
-            user = userRepository.findById(uid).orElse(null);
-        } catch (NumberFormatException ignored) {
-            user = userRepository.findByUsername(userIdStr).orElse(null);
-        }
+        User user = userRepository.findByUsername(username).orElse(null);
 
         if (user == null) {
             return new MarketEvent<>(
