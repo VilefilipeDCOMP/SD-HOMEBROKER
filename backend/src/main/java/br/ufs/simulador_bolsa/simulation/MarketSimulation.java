@@ -2,11 +2,12 @@ package br.ufs.simulador_bolsa.simulation;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ import br.ufs.simulador_bolsa.market.Asset;
 import br.ufs.simulador_bolsa.market.AssetCatalog;
 import br.ufs.simulador_bolsa.market.AssetEntity;
 import br.ufs.simulador_bolsa.market.AssetRepository;
+import br.ufs.simulador_bolsa.orders.Order;
 import br.ufs.simulador_bolsa.orders.OrderRequest;
 import br.ufs.simulador_bolsa.orders.OrderResult;
 import br.ufs.simulador_bolsa.orders.OrderService;
@@ -42,7 +44,6 @@ class MarketSimulation {
     private final WalletPort wallet;
     private final OrderService orders;
     private final MarketEventPublisher publisher;
-    private final Map<String, String> openOrders = new HashMap<>();
     private volatile EconomicEvent currentEvent;
 
     @Scheduled(initialDelayString = "${market.simulation.event-delay-ms:600000}",
@@ -78,8 +79,14 @@ class MarketSimulation {
         QUANTITIES.forEach((username, quantity) -> {
             try {
                 String userId = accounts.ensureAccount(username);
+                Set<String> symbolsWithOpenOrders = orders.findByUser(userId).stream()
+                        .filter(order -> isOpen(order.status()))
+                        .map(Order::symbol)
+                        .collect(Collectors.toSet());
                 for (Asset asset : availableAssets) {
-                    submitOrder(userId, quantity, asset, event);
+                    if (!symbolsWithOpenOrders.contains(asset.symbol())) {
+                        submitOrder(userId, quantity, asset, event);
+                    }
                 }
             } catch (RuntimeException e) {
                 log.warn("NPC_CYCLE_FAILED username={}", username, e);
@@ -89,13 +96,6 @@ class MarketSimulation {
 
     private void submitOrder(String userId, long quantity, Asset asset, EconomicEvent event) {
         String symbol = asset.symbol();
-        String key = userId + "|" + symbol;
-        String activeOrderId = openOrders.get(key);
-        if (activeOrderId != null && orders.findById(activeOrderId).filter(order -> isOpen(order.status())).isPresent()) {
-            return;
-        }
-        openOrders.remove(key);
-
         long availableShares = wallet.getAvailableShares(userId, symbol);
         int impact = event != null && symbol.equals(event.symbol()) ? event.impactPercent() : 0;
         OrderSide side = impact < 0 || (impact == 0 && availableShares > 0) ? OrderSide.SELL : OrderSide.BUY;
@@ -116,9 +116,6 @@ class MarketSimulation {
 
         OrderRequest request = new OrderRequest(userId, UUID.randomUUID().toString(), symbol, side, quantity, price);
         OrderResult result = orders.submit(request);
-        if (isOpen(result.status())) {
-            openOrders.put(key, result.orderId());
-        }
         log.info("NPC_ORDER_SUBMITTED userId={} clientOrderId={} orderId={} symbol={} side={} quantity={} price={} status={} reason={}",
                 userId, request.clientOrderId(), result.orderId(), symbol, side, quantity, price, result.status(), result.reason());
     }

@@ -1,6 +1,7 @@
 package br.ufs.simulador_bolsa.simulation;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +21,7 @@ import br.ufs.simulador_bolsa.orders.MatchingEngine;
 import br.ufs.simulador_bolsa.orders.Order;
 import br.ufs.simulador_bolsa.orders.OrderNotifier;
 import br.ufs.simulador_bolsa.orders.OrderProcessor;
+import br.ufs.simulador_bolsa.orders.OrderRequest;
 import br.ufs.simulador_bolsa.orders.OrderService;
 import br.ufs.simulador_bolsa.orders.OrderSide;
 import br.ufs.simulador_bolsa.orders.OrderStatus;
@@ -115,6 +117,23 @@ class MarketSimulationTest {
         simulation.submitOrders();
 
         assertEquals(new BigDecimal("36.75"), findOrder(CONSERVATIVE, SYMBOL).price());
+    }
+
+    @Test
+    void keepsOpenOrderAlreadyRegisteredForTheNpc() throws InterruptedException {
+        var openOrder = orders.submit(new OrderRequest(CONSERVATIVE, "recovered-42", SYMBOL,
+                OrderSide.BUY, 1L, new BigDecimal("35.00")));
+        assertTrue(accepted.await(5, TimeUnit.SECONDS));
+
+        simulation.submitOrders();
+
+        var ordersForSymbol = orders.findByUser(CONSERVATIVE).stream()
+                .filter(order -> SYMBOL.equals(order.symbol()))
+                .map(Order::orderId)
+                .toList();
+        assertEquals(List.of(openOrder.orderId()), ordersForSymbol);
+        assertEquals(OrderSide.BUY, findOrder(ACTIVE, SYMBOL).side());
+        assertEquals(OrderSide.BUY, findOrder(CONSERVATIVE, "VALE3").side());
     }
 
     private Order findOrder(String username, String symbol) {
