@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import br.ufs.simulador_bolsa.auth.entity.User;
 import br.ufs.simulador_bolsa.auth.repository.UserRepository;
@@ -101,6 +103,10 @@ public class SettlementService implements SettlementPort {
                     trade.buy().symbol(), trade.quantity(), trade.price(),
                     String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
             broadcastTradeExecuted(saved, trade);
+        } else {
+            log.error("SETTLEMENT_REJECTED_MISSING_PERSISTED_ID buyOrderId={} buyDbId={} sellOrderId={} sellDbId={}",
+                    trade.buy().orderId(), buyDbId, trade.sell().orderId(), sellDbId);
+            throw new IllegalStateException("Falha na liquidação: ordem sem ID persistido no banco de dados");
         }
     }
 
@@ -164,14 +170,11 @@ public class SettlementService implements SettlementPort {
         BigDecimal execPrice = command.executedPrice();
         BigDecimal totalFinancial = execPrice.multiply(BigDecimal.valueOf(qty));
 
-        // 4. Devolução da sobra de reserva do comprador
+        // 4. Devolução da sobra de reserva do comprador e liberação de reservas
         // O comprador reservou com base no precoAlvo da ordem
         BigDecimal targetPrice = buyOrder.getPrecoAlvo();
         BigDecimal reservedPerShare = targetPrice != null ? targetPrice : execPrice;
         BigDecimal totalReservedForExecution = reservedPerShare.multiply(BigDecimal.valueOf(qty));
-
-        // Libera a reserva total que havia sido bloqueada para essa parcela executada
-        walletService.releaseFunds(String.valueOf(lockedBuyer.getId()), totalReservedForExecution);
 
         // Se o preço executado foi menor que o preço alvo da ordem, a diferença (sobra) volta pro disponível
         BigDecimal refundRemainder = totalReservedForExecution.subtract(totalFinancial);
@@ -186,8 +189,7 @@ public class SettlementService implements SettlementPort {
         userRepository.save(lockedSeller);
 
         // 5. Transferência de custódia e cálculo do Preço Médio Ponderado
-        // Vendedor: libera ações reservadas e debita da carteira
-        walletService.releaseShares(String.valueOf(lockedSeller.getId()), asset.getTicker(), qty);
+        // Vendedor: debita da carteira
         PortfolioEntity sellerPortfolio = portfolioRepository.findByUsuarioIdAndTicker(lockedSeller.getId(), asset.getTicker())
                 .orElseThrow(() -> new IllegalStateException("Carteira do vendedor não encontrada para o ativo: " + asset.getTicker()));
 
@@ -251,10 +253,25 @@ public class SettlementService implements SettlementPort {
                 savedTrade.getId(), lockedBuyer.getUsername(), lockedBuyer.getSaldo(), buyerPortfolio.getQuantidade(), buyerPortfolio.getPrecoMedio(),
                 lockedSeller.getUsername(), lockedSeller.getSaldo(), sellerPortfolio.getQuantidade());
 
-        // 9. Notifica ambos os investidores via WebSocket com seus respectivos snapshots atualizados
-        notifyWalletUpdate(lockedBuyer.getUsername(), lockedBuyer.getId());
-        notifyWalletUpdate(lockedSeller.getUsername(), lockedSeller.getId());
-        log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(), lockedBuyer.getUsername(), lockedSeller.getUsername());
+        // 9. Liberação de reservas em memória e notificações (apenas após o commit bem-sucedido)
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    walletService.releaseFunds(String.valueOf(lockedBuyer.getId()), totalReservedForExecution);
+                    walletService.releaseShares(String.valueOf(lockedSeller.getId()), asset.getTicker(), qty);
+                    notifyWalletUpdate(lockedBuyer.getUsername(), lockedBuyer.getId());
+                    notifyWalletUpdate(lockedSeller.getUsername(), lockedSeller.getId());
+                    log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(), lockedBuyer.getUsername(), lockedSeller.getUsername());
+                }
+            });
+        } else {
+            walletService.releaseFunds(String.valueOf(lockedBuyer.getId()), totalReservedForExecution);
+            walletService.releaseShares(String.valueOf(lockedSeller.getId()), asset.getTicker(), qty);
+            notifyWalletUpdate(lockedBuyer.getUsername(), lockedBuyer.getId());
+            notifyWalletUpdate(lockedSeller.getUsername(), lockedSeller.getId());
+            log.info("CLIENTS_NOTIFIED tradeId={} buyer={} seller={}", savedTrade.getId(), lockedBuyer.getUsername(), lockedSeller.getUsername());
+        }
 
         return savedTrade;
     }

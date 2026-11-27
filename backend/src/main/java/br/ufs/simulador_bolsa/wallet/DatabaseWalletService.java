@@ -257,6 +257,41 @@ public class DatabaseWalletService implements WalletPort {
         return new WalletSnapshot(available, reserved, positions);
     }
 
+    @Transactional
+    public void grantShares(String username, String symbol, int quantity, BigDecimal avgPrice) {
+        if (quantity <= 0) return;
+        User user = resolveUser(username);
+        if (user == null) {
+            throw new IllegalArgumentException("Usuário não encontrado: " + username);
+        }
+        AssetEntity asset = assetRepository.findByTicker(symbol.toUpperCase()).orElseGet(() -> {
+            AssetEntity created = AssetEntity.builder()
+                    .ticker(symbol.toUpperCase())
+                    .nomeEmpresa(symbol.toUpperCase())
+                    .precoAtual(avgPrice != null ? avgPrice : new BigDecimal("10.00"))
+                    .build();
+            return assetRepository.save(created);
+        });
+
+        PortfolioId id = new PortfolioId(user.getId(), asset.getId());
+        PortfolioEntity entity = portfolioRepository.findById(id).orElseGet(() -> {
+            PortfolioEntity p = new PortfolioEntity();
+            p.setId(id);
+            p.setUsuario(user);
+            p.setAtivo(asset);
+            p.setQuantidade(0);
+            p.setPrecoMedio(avgPrice != null ? avgPrice : BigDecimal.ZERO);
+            return p;
+        });
+
+        entity.setQuantidade(entity.getQuantidade() + quantity);
+        if (avgPrice != null) {
+            entity.setPrecoMedio(avgPrice);
+        }
+        portfolioRepository.save(entity);
+        log.info("SHARES_GRANTED user={} symbol={} qty={} avgPrice={}", username, symbol, quantity, avgPrice);
+    }
+
     private static void requirePositive(BigDecimal amount) {
         if (amount == null || amount.signum() <= 0) {
             throw new IllegalArgumentException("O valor monetário deve ser positivo");

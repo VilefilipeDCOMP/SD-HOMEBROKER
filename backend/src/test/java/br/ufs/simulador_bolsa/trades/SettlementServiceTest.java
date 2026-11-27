@@ -183,4 +183,56 @@ class SettlementServiceTest {
         assertThrows(IllegalStateException.class, () -> settlementService.settleTrade(cmd));
         verifyNoInteractions(tradeRepository);
     }
+
+    @Test
+    @DisplayName("Falha no INSERT de historico_negociacoes deve abortar transação sem liberar reservas em memória")
+    void testRollbackDoesNotReleaseReservations() {
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(buyOrder));
+        when(orderRepository.findById(200L)).thenReturn(Optional.of(sellOrder));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(buyer));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(seller));
+        when(assetRepository.findByTicker("PETR4")).thenReturn(Optional.of(petr4));
+
+        PortfolioEntity sellerPortfolio = PortfolioEntity.builder()
+                .usuario(seller)
+                .ativo(petr4)
+                .quantidade(20)
+                .precoMedio(new BigDecimal("30.00"))
+                .build();
+        when(portfolioRepository.findByUsuarioIdAndTicker(2L, "PETR4")).thenReturn(Optional.of(sellerPortfolio));
+        when(portfolioRepository.findByUsuarioIdAndTicker(1L, "PETR4")).thenReturn(Optional.empty());
+
+        // Força erro no INSERT de historico_negociacoes
+        when(tradeRepository.save(any(TradeEntity.class))).thenThrow(new RuntimeException("DB_INSERT_FAILURE"));
+
+        TradeExecutionCommand cmd = new TradeExecutionCommand(100L, 200L, "PETR4", 10, new BigDecimal("34.00"));
+
+        assertThrows(RuntimeException.class, () -> settlementService.settleTrade(cmd));
+
+        // Como a transação falhou antes do commit, a liberação de fundos/ações NÃO deve ocorrer
+        verify(walletService, never()).releaseFunds(anyString(), any(BigDecimal.class));
+        verify(walletService, never()).releaseShares(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("Settle com ordens sem databaseId persistido deve sinalizar erro ao motor")
+    void testSettleWithoutPersistedDatabaseIdThrowsException() {
+        br.ufs.simulador_bolsa.orders.Order memBuy = new br.ufs.simulador_bolsa.orders.Order(
+                new br.ufs.simulador_bolsa.orders.OrderRequest("buyer", "cid-b", "PETR4", br.ufs.simulador_bolsa.orders.OrderSide.BUY, 10L, new BigDecimal("35.00")),
+                1L
+        );
+        br.ufs.simulador_bolsa.orders.Order memSell = new br.ufs.simulador_bolsa.orders.Order(
+                new br.ufs.simulador_bolsa.orders.OrderRequest("seller", "cid-s", "PETR4", br.ufs.simulador_bolsa.orders.OrderSide.SELL, 10L, new BigDecimal("35.00")),
+                2L
+        );
+
+        // Nenhuma das ordens possui databaseId
+        assertNull(memBuy.databaseId());
+        assertNull(memSell.databaseId());
+
+        br.ufs.simulador_bolsa.orders.Trade trade = new br.ufs.simulador_bolsa.orders.Trade(memBuy, memSell, 10L, new BigDecimal("35.00"));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> settlementService.settle(trade));
+        assertTrue(ex.getMessage().contains("sem ID persistido"));
+    }
 }

@@ -14,6 +14,9 @@ import br.ufs.simulador_bolsa.market.Asset;
 import br.ufs.simulador_bolsa.market.AssetCatalog;
 import br.ufs.simulador_bolsa.market.AssetEntity;
 import br.ufs.simulador_bolsa.market.AssetRepository;
+import br.ufs.simulador_bolsa.wallet.PortfolioEntity;
+import br.ufs.simulador_bolsa.wallet.PortfolioId;
+import br.ufs.simulador_bolsa.wallet.PortfolioRepository;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -26,6 +29,8 @@ public class OrderPersistenceService {
     private final UserRepository userRepository;
     private final AssetRepository assetRepository;
     private final AssetCatalog assetCatalog;
+    private final PortfolioRepository portfolioRepository;
+    private final org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder passwordEncoder = new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder();
 
     @Transactional
     public void seedDefaultAssetsIfNeeded() {
@@ -38,6 +43,38 @@ public class OrderPersistenceService {
                         .build();
                 return assetRepository.save(entity);
             });
+        }
+        seedDemoSellerIfNeeded();
+    }
+
+    private void seedDemoSellerIfNeeded() {
+        String sellerUsername = "vendedor_demo";
+        User seller = userRepository.findByUsername(sellerUsername).orElseGet(() -> {
+            User u = User.builder()
+                    .username(sellerUsername)
+                    .nome("Vendedor Demo")
+                    .email("vendedor_demo@simulador.local")
+                    .senhaHash(passwordEncoder.encode("senha123"))
+                    .saldo(new BigDecimal("10000.00"))
+                    .build();
+            return userRepository.save(u);
+        });
+
+        // Concede 100 ações de cada ativo para o vendedor_demo
+        for (Asset asset : assetCatalog.listAll()) {
+            AssetEntity assetEntity = ensureAsset(asset.symbol());
+            PortfolioId pid = new PortfolioId(seller.getId(), assetEntity.getId());
+            if (!portfolioRepository.existsById(pid)) {
+                PortfolioEntity p = PortfolioEntity.builder()
+                        .id(pid)
+                        .usuario(seller)
+                        .ativo(assetEntity)
+                        .quantidade(100)
+                        .precoMedio(asset.currentPrice())
+                        .build();
+                portfolioRepository.save(p);
+                log.info("SEEDED_DEMO_SELLER_SHARES user={} asset={} qty=100", sellerUsername, asset.symbol());
+            }
         }
     }
 
