@@ -90,21 +90,34 @@ public class MatchingEngine {
 
     public synchronized boolean cancelFromBook(Order order) {
         if (order == null) return false;
-        OrderBook book = books.get(order.symbol());
-        if (book != null) {
-            book.remove(order);
-        }
-        long remaining = order.remainingQuantity();
-        if (!order.cancel()) {
+
+        if (order.status() != OrderStatus.ACCEPTED
+                && order.status() != OrderStatus.PARTIALLY_FILLED) {
             return false;
         }
-        releaseReservedResources(order, remaining);
+
+        OrderBook book = books.get(order.symbol());
+
+        if (book == null || !book.contains(order)) {
+            return false;
+        }
+
         if (persistenceService != null) {
             persistenceService.markOrderCancelled(order);
         }
-        if (book != null) {
-            publishBookUpdate(order.symbol(), book);
+
+        long remaining = order.remainingQuantity();
+
+        if (!order.cancel()) {
+            return false;
         }
+
+        book.remove(order);
+
+        releaseReservedResources(order, remaining);
+
+        publishBookUpdate(order.symbol(), book);
+
         return true;
     }
 

@@ -1,6 +1,7 @@
 package br.ufs.simulador_bolsa.orders;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -55,6 +56,48 @@ class OrderConcurrencyTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void cancellationImmediatelyAfterSubmissionReleasesFunds() {
+        kit = new OrdersKit("1000.00");
+
+        OrderResult result = kit.service.submit(
+                OrdersKit.buy("u1", "c1", "PETR4", 10, "10.00")
+        );
+
+        var cancelled = kit.service.cancelOrder(result.orderId(), "u1");
+
+        assertTrue(cancelled.isPresent());
+        assertEquals(OrderStatus.CANCELLED, cancelled.get().status());
+
+        assertEquals(0, new BigDecimal("1000.00")
+                .compareTo(kit.wallet.getAvailableBalance("u1")));
+
+        assertEquals(0, BigDecimal.ZERO
+                .compareTo(kit.wallet.getReservedBalance("u1")));
+    }
+
+    @Test
+    void anotherUserCannotCancelOrder() throws Exception {
+        kit = new OrdersKit("1000.00");
+
+        OrderResult result = kit.service.submit(
+                OrdersKit.buy("u1", "c1", "PETR4", 10, "10.00")
+        );
+
+        kit.awaitFinal(result.orderId());
+
+        var cancelled = kit.service.cancelOrder(result.orderId(), "u2");
+
+        assertTrue(cancelled.isEmpty());
+
+        assertEquals(OrderStatus.ACCEPTED,
+                kit.service.findById(result.orderId())
+                        .orElseThrow().status());
+
+        assertEquals(0, new BigDecimal("100.00")
+                .compareTo(kit.wallet.getReservedBalance("u1")));
     }
 
     @Test
