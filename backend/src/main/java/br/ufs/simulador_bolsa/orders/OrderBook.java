@@ -36,6 +36,12 @@ public class OrderBook {
         return side == OrderSide.BUY ? bids : asks;
     }
 
+    public boolean contains(Order order) {
+        var queue = sideOf(order.side()).get(order.price());
+
+        return queue != null && queue.contains(order);
+    }
+
     public Map<String, Object> toSnapshot(String symbol) {
         List<Map<String, Object>> bidLevels = aggregateLevels(bids);
         List<Map<String, Object>> askLevels = aggregateLevels(asks);

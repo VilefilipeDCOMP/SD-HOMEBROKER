@@ -98,22 +98,23 @@ public class MatchingEngine {
 
         OrderBook book = books.get(order.symbol());
 
-        if (book == null || !book.remove(order)) {
+        if (book == null || !book.contains(order)) {
             return false;
+        }
+
+        if (persistenceService != null) {
+            persistenceService.markOrderCancelled(order);
         }
 
         long remaining = order.remainingQuantity();
 
         if (!order.cancel()) {
-            book.add(order);
             return false;
         }
 
-        releaseReservedResources(order, remaining);
+        book.remove(order);
 
-        if (persistenceService != null) {
-            persistenceService.markOrderCancelled(order);
-        }
+        releaseReservedResources(order, remaining);
 
         publishBookUpdate(order.symbol(), book);
 

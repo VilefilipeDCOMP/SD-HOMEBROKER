@@ -178,14 +178,39 @@ public class OrderProcessor {
         double latencyMs = order.elapsedMillis();
 
         if (reserved) {
-            order.accept();
             if (persistenceService != null) {
                 try {
-                    persistenceService.persistOpenOrder(order);
+                    Long databaseId = persistenceService.persistOpenOrder(order);
+
+                    if (databaseId == null) {
+                        throw new IllegalStateException("Não foi possível persistir a ordem");
+                    }
+
                 } catch (RuntimeException e) {
-                    log.warn("ORDER_DB_PERSIST_WARN orderId={} reason={}", order.orderId(), e.getMessage());
+                    log.error("ORDER_DB_PERSIST_FAILED orderId={}", order.orderId(), e);
+
+                    order.assignDatabaseId(null);
+
+                    if (order.side() == OrderSide.BUY) {
+                        wallet.releaseFunds(order.userId(), order.totalValue()
+                        );
+                    } else {
+                        wallet.releaseShares(order.userId(), order.symbol(), order.quantity()
+                        );
+                    }
+
+                    order.reject(RejectReason.INTERNAL_ERROR);
+
+                    if (metricsService != null) {
+                        metricsService.recordOrderRejected(order.elapsedMillis());
+                    }
+                    log.info("ORDER_REJECTED orderId={} reason={}", order.orderId(), RejectReason.INTERNAL_ERROR);
+
+                    return;
                 }
             }
+
+            order.accept();
             if (metricsService != null) {
                 metricsService.recordOrderAccepted(latencyMs);
             }
