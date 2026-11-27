@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -23,6 +24,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import br.ufs.simulador_bolsa.auth.entity.User;
 import br.ufs.simulador_bolsa.auth.repository.UserRepository;
@@ -82,6 +85,9 @@ class LoadAndFaultToleranceTest {
 
     @Autowired
     private ObservabilityController observabilityController;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     private void grantShares(String username, String ticker, int quantity, BigDecimal avgPrice) {
         User user = userRepository.findByUsername(username).orElseThrow();
@@ -174,6 +180,63 @@ class LoadAndFaultToleranceTest {
 
         OrderEntity dbOrderAfterTrade = orderRepository.findById(openBuy.databaseId()).orElseThrow();
         assertEquals("EXECUTADA", dbOrderAfterTrade.getStatus());
+    }
+
+    @Test
+    void automaticCancellationWriteFailurePreservesReservationThroughRecovery() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "cancel_fault_" + suffix;
+        String ticker = "CF" + suffix.toUpperCase(Locale.ROOT);
+        BigDecimal price = new BigDecimal("25.00");
+        authService.register(username, "senha123");
+        grantShares(username, ticker, 10, price);
+
+        Order resting = new Order(new OrderRequest(
+                username, "resting", ticker, OrderSide.SELL, 10L, price
+        ), orderService.nextSequenceNumber());
+        assertTrue(walletService.reserveShares(username, ticker, 10));
+        persistenceService.persistOpenOrder(resting);
+        assertTrue(resting.accept());
+        matchingEngine.match(resting);
+        var bookBefore = matchingEngine.getBookSnapshot(ticker);
+
+        Order incoming = new Order(new OrderRequest(
+                username, "incoming", ticker, OrderSide.BUY, 4L, price
+        ), orderService.nextSequenceNumber());
+        assertTrue(walletService.reserveFunds(username, incoming.totalValue()));
+        long incomingId = persistenceService.persistOpenOrder(incoming);
+        assertTrue(incoming.accept());
+
+        jdbcTemplate.execute("ALTER TABLE ordens ADD CONSTRAINT test_auto_cancel_write_failure "
+                + "CHECK (id <> " + incomingId + " OR status <> 'CANCELADA')");
+        try {
+            assertThrows(DataIntegrityViolationException.class,
+                    () -> matchingEngine.match(incoming));
+            assertEquals(OrderStatus.ACCEPTED, incoming.status());
+            assertEquals("ABERTA", orderRepository.findById(incomingId).orElseThrow().getStatus());
+            assertEquals(bookBefore, matchingEngine.getBookSnapshot(ticker));
+            assertEquals(0, incoming.totalValue().compareTo(walletService.getReservedBalance(username)));
+            assertEquals(10, walletService.getReservedShares(username, ticker));
+        } finally {
+            jdbcTemplate.execute("ALTER TABLE ordens DROP CONSTRAINT test_auto_cancel_write_failure");
+        }
+
+        recoveryRunner.simulateCrashAndRecover();
+
+        Order recovered = orderService.findById("db-" + incomingId).orElseThrow();
+        assertEquals(OrderStatus.ACCEPTED, recovered.status());
+        assertEquals("ABERTA", orderRepository.findById(incomingId).orElseThrow().getStatus());
+        assertEquals(List.of(Map.of("price", price, "quantity", 4L)),
+                matchingEngine.getBookSnapshot(ticker).get("bids"));
+        assertEquals(bookBefore.get("asks"), matchingEngine.getBookSnapshot(ticker).get("asks"));
+        assertEquals(0, incoming.totalValue().compareTo(walletService.getReservedBalance(username)));
+        assertEquals(10, walletService.getReservedShares(username, ticker));
+
+        assertTrue(matchingEngine.cancelFromBook(recovered));
+        assertTrue(matchingEngine.cancelFromBook(
+                orderService.findById("db-" + resting.databaseId()).orElseThrow()));
+        assertEquals("CANCELADA", orderRepository.findById(incomingId).orElseThrow().getStatus());
+        assertEquals(0, walletService.getReservedBalance(username).signum());
     }
 
     @Test

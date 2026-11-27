@@ -132,11 +132,18 @@ public class MatchingEngine {
     }
 
     private void cancelRemainder(Order order, RejectReason reason) {
-        long remaining = order.remainingQuantity();
-        if (!order.cancel(reason)) return;
-        releaseReservedResources(order, remaining);
+        if (order.status() != OrderStatus.ACCEPTED
+                && order.status() != OrderStatus.PARTIALLY_FILLED) {
+            return;
+        }
+
         if (persistenceService != null) {
             persistenceService.markOrderCancelled(order);
+        }
+
+        long remaining = order.remainingQuantity();
+        if (order.cancel(reason)) {
+            releaseReservedResources(order, remaining);
         }
     }
 
