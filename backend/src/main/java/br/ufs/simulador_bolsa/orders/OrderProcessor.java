@@ -6,8 +6,10 @@ import java.util.concurrent.LinkedBlockingQueue;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import br.ufs.simulador_bolsa.observability.MarketMetricsService;
 import br.ufs.simulador_bolsa.wallet.WalletPort;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -28,6 +30,12 @@ public class OrderProcessor {
     private final OrderNotifier notifier;
     private final MatchingEngine engine;
     private final BlockingQueue<Order> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+
+    @Autowired(required = false)
+    private OrderPersistenceService persistenceService;
+
+    @Autowired(required = false)
+    private MarketMetricsService metricsService;
 
     private volatile boolean running;
     private Thread consumer;
@@ -91,6 +99,9 @@ public class OrderProcessor {
         } catch (RuntimeException e) {
             log.error("ORDER_FAILED orderId={} userId={}", order.orderId(), order.userId(), e);
             order.reject(RejectReason.INTERNAL_ERROR);
+            if (metricsService != null) {
+                metricsService.recordOrderRejected(order.elapsedMillis());
+            }
         }
         notifyQuietly(order);
     }
@@ -110,16 +121,33 @@ public class OrderProcessor {
             failure = RejectReason.INSUFFICIENT_SHARES;
         }
 
+        double latencyMs = order.elapsedMillis();
+
         if (reserved) {
             order.accept();
-            log.info("ORDER_ACCEPTED orderId={} userId={} seq={} {} {} x{} @{}",
-                    order.orderId(), order.userId(), order.sequenceNumber(),
-                    order.side(), order.symbol(), order.quantity(), order.price());
+            if (persistenceService != null) {
+                try {
+                    persistenceService.persistOpenOrder(order);
+                } catch (RuntimeException e) {
+                    log.warn("ORDER_DB_PERSIST_WARN orderId={} reason={}", order.orderId(), e.getMessage());
+                }
+            }
+            if (metricsService != null) {
+                metricsService.recordOrderAccepted(latencyMs);
+            }
+            log.info("ORDER_ACCEPTED orderId={} dbId={} userId={} seq={} {} {} x{} @{} latencyMs={}",
+                    order.orderId(), order.databaseId(), order.userId(), order.sequenceNumber(),
+                    order.side(), order.symbol(), order.quantity(), order.price(),
+                    String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
             engine.match(order);
         } else {
             order.reject(failure);
-            log.info("ORDER_REJECTED orderId={} userId={} seq={} reason={}",
-                    order.orderId(), order.userId(), order.sequenceNumber(), failure);
+            if (metricsService != null) {
+                metricsService.recordOrderRejected(latencyMs);
+            }
+            log.info("ORDER_REJECTED orderId={} userId={} seq={} reason={} latencyMs={}",
+                    order.orderId(), order.userId(), order.sequenceNumber(), failure,
+                    String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
         }
     }
 
@@ -127,6 +155,8 @@ public class OrderProcessor {
     private void notifyQuietly(Order order) {
         try {
             notifier.orderUpdated(order);
+            log.info("CLIENTS_NOTIFIED orderId={} userId={} status={}",
+                    order.orderId(), order.userId(), order.status());
         } catch (RuntimeException e) {
             log.warn("ORDER_NOTIFY_FAILED orderId={} userId={}", order.orderId(), order.userId(), e);
         }
