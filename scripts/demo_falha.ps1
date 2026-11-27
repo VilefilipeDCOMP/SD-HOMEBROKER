@@ -8,59 +8,92 @@ $ErrorActionPreference = "Stop"
 function mandarStomp($ws, [string]$texto) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($texto + [char]0)
     $seg = [System.ArraySegment[byte]]::new($bytes)
-    $ws.SendAsync($seg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    $null = $ws.SendAsync($seg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
 }
 
-function lerStomp($ws, [int]$ms = 1500) {
-    $lista = @()
+function lerFrame($sessao, [int]$timeoutMs = 10000) {
+    if ($sessao.fila.Count -gt 0) {
+        return $sessao.fila.Dequeue()
+    }
+
     $buf = New-Object byte[] 16384
-    $fim = (Get-Date).AddMilliseconds($ms)
-    while ((Get-Date) -lt $fim) {
-        $resto = [int]($fim - (Get-Date)).TotalMilliseconds
-        if ($resto -le 0) { break }
-        $cts = [Threading.CancellationTokenSource]::new($resto)
+    $acum = ""
+    while ($true) {
+        $cts = [Threading.CancellationTokenSource]::new($timeoutMs)
         try {
             $seg = [System.ArraySegment[byte]]::new($buf)
-            $res = $ws.ReceiveAsync($seg, $cts.Token).GetAwaiter().GetResult()
-            $str = [System.Text.Encoding]::UTF8.GetString($buf, 0, $res.Count)
-            foreach ($p in ($str -split "`0")) {
-                $idx = $p.IndexOf("`n`n")
-                if ($idx -lt 0) { $idx = $p.IndexOf("`r`n`r`n") }
-                if ($idx -ge 0) {
-                    $json = $p.Substring($idx).Trim()
-                    if ($json.StartsWith("{")) {
-                        try { $lista += ($json | ConvertFrom-Json) } catch {}
+            $res = $sessao.ws.ReceiveAsync($seg, $cts.Token).GetAwaiter().GetResult()
+            if ($res.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                throw "Conexao WebSocket encerrada pelo servidor"
+            }
+            $acum += [System.Text.Encoding]::UTF8.GetString($buf, 0, $res.Count)
+            if ($res.EndOfMessage) {
+                foreach ($parte in ($acum -split "`0")) {
+                    $limpo = $parte.Trim("`r", "`n")
+                    if ($limpo.Length -gt 0) {
+                        $sessao.fila.Enqueue($limpo)
                     }
                 }
+                $acum = ""
+                if ($sessao.fila.Count -gt 0) {
+                    return $sessao.fila.Dequeue()
+                }
             }
-        } catch {
-            break
         } finally {
             $cts.Dispose()
         }
     }
-    return $lista
+}
+
+function extrairEvento([string]$frame) {
+    $idx = $frame.IndexOf("`n`n")
+    if ($idx -lt 0) { $idx = $frame.IndexOf("`r`n`r`n") }
+    if ($idx -lt 0) { return $null }
+    $json = $frame.Substring($idx).Trim()
+    if (-not $json.StartsWith("{")) { return $null }
+    try { return ($json | ConvertFrom-Json) } catch { return $null }
 }
 
 function abrirSessao($wsUrl, $token) {
     $ws = [System.Net.WebSockets.ClientWebSocket]::new()
     $ws.Options.SetRequestHeader("Origin", "http://localhost:5173")
-    $ws.ConnectAsync([uri]$wsUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    $null = $ws.ConnectAsync([uri]$wsUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    $sessao = [pscustomobject]@{
+        ws = $ws
+        fila = [System.Collections.Generic.Queue[string]]::new()
+    }
     mandarStomp $ws "CONNECT`naccept-version:1.2`nAuthorization:Bearer $token`n`n"
-    $null = lerStomp $ws 600
+    while ($true) {
+        $frame = lerFrame $sessao
+        if ($frame.StartsWith("CONNECTED")) { break }
+        if ($frame.StartsWith("ERROR")) { throw "Erro STOMP: $frame" }
+    }
     mandarStomp $ws "SUBSCRIBE`nid:s1`ndestination:/user/queue/orders`n`n"
     mandarStomp $ws "SUBSCRIBE`nid:s2`ndestination:/user/queue/replies`n`n"
-    Start-Sleep -Milliseconds 250
-    return $ws
+    return $sessao
 }
 
-function consultarEstado($ws) {
-    mandarStomp $ws "SEND`ndestination:/app/wallet/me`ncontent-type:application/json`n`n{}"
-    mandarStomp $ws "SEND`ndestination:/app/orderbook/snapshot`ncontent-type:application/json`n`n{`"symbol`":`"PETR4`"}"
-    $eventos = lerStomp $ws 1200
-    $carteira = ($eventos | Where-Object { $_.type -eq "WALLET_SNAPSHOT" } | Select-Object -Last 1).data
-    $livro = ($eventos | Where-Object { $_.type -eq "ORDER_BOOK_SNAPSHOT" } | Select-Object -Last 1).data
-    return @{ carteira = $carteira; livro = $livro }
+function fecharSessao($sessao) {
+    try {
+        if ($sessao.ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+            $null = $sessao.ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "fim", [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+        }
+    } catch {}
+    $sessao.ws.Dispose()
+}
+
+function consultarEstado($sessao) {
+    mandarStomp $sessao.ws "SEND`ndestination:/app/wallet/me`ncontent-type:application/json`n`n{}"
+    mandarStomp $sessao.ws "SEND`ndestination:/app/orderbook/snapshot`ncontent-type:application/json`n`n{`"symbol`":`"PETR4`"}"
+    $carteira = $null
+    $livro = $null
+    while ($null -eq $carteira -or $null -eq $livro) {
+        $ev = extrairEvento (lerFrame $sessao)
+        if ($null -eq $ev) { continue }
+        if ($ev.type -eq "WALLET_SNAPSHOT") { $carteira = $ev.data }
+        if ($ev.type -eq "ORDER_BOOK_SNAPSHOT") { $livro = $ev.data }
+    }
+    return [pscustomobject]@{ carteira = $carteira; livro = $livro }
 }
 
 $wsUrl = ($Url -replace "^http", "ws") + "/ws"
@@ -74,7 +107,7 @@ $auth = Invoke-RestMethod -Uri "$Url/auth/register" -Method Post -ContentType "a
 
 Write-Host "Usuario: $user (saldo inicial: $($auth.balance))"
 
-$ws = abrirSessao $wsUrl $auth.token
+$sessao = abrirSessao $wsUrl $auth.token
 $ordem = @{
     clientOrderId = "ordem-$id"
     symbol = "PETR4"
@@ -83,14 +116,17 @@ $ordem = @{
     price = "35.00"
 } | ConvertTo-Json -Compress
 
-mandarStomp $ws "SEND`ndestination:/app/orders/create`ncontent-type:application/json`n`n$ordem"
-$null = lerStomp $ws 1000
+mandarStomp $sessao.ws "SEND`ndestination:/app/orders/create`ncontent-type:application/json`n`n$ordem"
+while ($true) {
+    $ev = extrairEvento (lerFrame $sessao)
+    if ($null -ne $ev -and $ev.type -eq "ORDER_UPDATED") { break }
+}
 
-$antes = consultarEstado $ws
+$antes = consultarEstado $sessao
 Write-Host "Antes do restart:"
 Write-Host "  Saldo disponivel: $($antes.carteira.balance) | Reservado: $($antes.carteira.reservedBalance)"
 Write-Host "  Livro PETR4 (compra): $($antes.livro.bids | ConvertTo-Json -Compress)"
-$ws.Dispose()
+fecharSessao $sessao
 
 if ($Simular) {
     $rec = Invoke-RestMethod -Uri "$Url/system/fault/simulate-crash-recovery" -Method Post
@@ -110,9 +146,9 @@ if ($Simular) {
     docker compose logs backend --tail 60 | Select-String -Pattern "CRASH_RECOVERY|ORDER_RECOVERED|ORDER_BOOK_RESTORED"
 }
 
-$ws2 = abrirSessao $wsUrl $auth.token
-$depois = consultarEstado $ws2
+$sessao2 = abrirSessao $wsUrl $auth.token
+$depois = consultarEstado $sessao2
 Write-Host "Depois do restart:"
 Write-Host "  Saldo disponivel: $($depois.carteira.balance) | Reservado: $($depois.carteira.reservedBalance)"
 Write-Host "  Livro PETR4 (compra): $($depois.livro.bids | ConvertTo-Json -Compress)"
-$ws2.Dispose()
+fecharSessao $sessao2
