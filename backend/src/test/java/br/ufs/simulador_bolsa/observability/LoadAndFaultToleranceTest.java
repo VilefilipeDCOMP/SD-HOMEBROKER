@@ -93,11 +93,8 @@ class LoadAndFaultToleranceTest {
     private ObservabilityController observabilityController;
 
     @BeforeEach
-    void isolateScenarioState() throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (orderProcessor.pendingCount() > 0 && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
+    void isolateScenarioState() {
+        orderProcessor.awaitIdle();
         matchingEngine.clearBooks();
         orderService.clearInMemoryOrders();
         walletService.clearInMemoryReservations();
@@ -150,15 +147,10 @@ class LoadAndFaultToleranceTest {
                 + " (atual=" + (current != null ? current.status() : "null") + ")");
     }
 
-    private void awaitExpectedTradesPersisted(long tradesBefore, int expectedNewTrades) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
-        while (System.nanoTime() < deadline) {
-            long currentNewTrades = tradeRepository.count() - tradesBefore;
-            if (orderProcessor.pendingCount() == 0 && currentNewTrades >= expectedNewTrades) {
-                return;
-            }
-            Thread.sleep(10);
-        }
+    private void awaitExpectedTradesPersisted(long tradesBefore, int expectedNewTrades) {
+        orderProcessor.awaitIdle();
+        long currentNewTrades = tradeRepository.count() - tradesBefore;
+        assertEquals(expectedNewTrades, currentNewTrades);
     }
 
     @Test

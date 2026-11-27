@@ -72,6 +72,9 @@ public class OrderProcessor {
 
                 case OrderCommand.Submit submit ->
                         submit.order().reject(RejectReason.INTERNAL_ERROR);
+
+                case OrderCommand.Flush flush ->
+                        flush.result().complete(null);
             }
         }
 
@@ -112,6 +115,20 @@ public class OrderProcessor {
         return queue.size();
     }
 
+    public void awaitIdle() {
+        CompletableFuture<Void> done;
+        synchronized (this) {
+            if (!running) {
+                return;
+            }
+            done = new CompletableFuture<>();
+            if (!queue.offer(new OrderCommand.Flush(done))) {
+                throw new RejectedExecutionException("Fila de ordens cheia");
+            }
+        }
+        done.join();
+    }
+
     //é o "do", fica rodando ai até dar exception de interrupcao
     private void runLoop() {
         while (running) {
@@ -121,6 +138,7 @@ public class OrderProcessor {
                 switch (command) {
                     case OrderCommand.Submit submit -> process(submit.order());
                     case OrderCommand.Cancel cancel -> processCancel(cancel);
+                    case OrderCommand.Flush flush -> flush.result().complete(null);
                 }
 
             } catch (InterruptedException e) {

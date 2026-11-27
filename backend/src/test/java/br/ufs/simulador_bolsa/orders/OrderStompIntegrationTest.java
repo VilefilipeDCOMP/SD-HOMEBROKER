@@ -56,7 +56,7 @@ class OrderStompIntegrationTest {
     private OrderService orderService;
 
     @Autowired
-    private MatchingEngine matchingEngine;
+    private OrderProcessor orderProcessor;
 
     @Autowired
     private OrderRepository orderRepository;
@@ -70,11 +70,13 @@ class OrderStompIntegrationTest {
 
     @AfterEach
     void cleanupStompOrders() {
+        orderProcessor.awaitIdle();
         for (String username : createdUsernames) {
             for (Order order : orderService.findByUser(username)) {
-                matchingEngine.cancelFromBook(order);
+                orderService.cancelOrder(order.orderId(), username);
             }
         }
+        orderProcessor.awaitIdle();
         for (Long userId : createdUserIds) {
             List<OrderEntity> userOrders = orderRepository.findByUsuarioIdOrderByCriadoEmDesc(userId);
             if (!userOrders.isEmpty()) {
