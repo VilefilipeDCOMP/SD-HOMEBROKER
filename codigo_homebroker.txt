@@ -1,0 +1,1503 @@
+﻿
+===== frontend/index.html =====
+
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador de Bolsa de Valores</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+ 
+  <main id="tela-login" class="login">
+    <svg class="login-fundo" aria-hidden="true" viewBox="0 0 1200 300" preserveAspectRatio="none">
+      <polyline points="0,260 100,230 200,245 300,190 400,205 500,150 600,170 700,110 800,130 900,70 1000,90 1100,40 1200,55"
+                fill="none" stroke="#1B2A4A" stroke-width="3" vector-effect="non-scaling-stroke"/>
+    </svg>
+
+    <form id="form-login" class="cartao login-cartao">
+      <div class="logo logo-grande">
+        <svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#06202E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>
+        </svg>
+      </div>
+      <h1>Simulador de Bolsa de Valores</h1>
+      <p class="sub">Pratique operaÃ§Ãµes no mercado com saldo virtual, cuida papai</p>
+
+      <div class="campo-grupo">
+        <label for="usuario">UsuÃ¡rio</label>
+        <input id="usuario" type="text" placeholder="Seu nome" autocomplete="off">
+      </div>
+      <div class="campo-grupo">
+        <label for="senha">Senha</label>
+        <input id="senha" type="password" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢">
+      </div>
+
+      <button id="btn-submit-auth" type="submit" class="btn btn-azul">Entrar no mercado</button>
+
+      <p class="auth-toggle">
+        <span id="label-toggle-auth">NÃ£o tem conta?</span>
+        <button id="btn-toggle-auth" type="button" class="link link-azul">Criar conta</button>
+      </p>
+
+      <p class="nota">Crie sua conta ou acerte seu login para operar no mercado.</p>
+    </form>
+  </main>
+
+  <div id="tela-mercado" hidden>
+
+    <header class="topo">
+      <div class="topo-esq">
+        <div class="logo">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06202E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>
+          </svg>
+        </div>
+        <strong id="ola">OlÃ¡!</strong>
+      </div>
+      <div class="topo-dir">
+        <div class="saldo">
+          <span>Saldo disponÃ­vel</span>
+          <strong id="saldo" class="mono">R$ 0,00</strong>
+        </div>
+        <button id="btn-sair" type="button" class="link">Sair</button>
+      </div>
+    </header>
+
+    <main class="conteudo">
+      <div class="colunas">
+
+        <!-- Mercado (visualizaÃ§Ã£o) -->
+        <section class="cartao mercado">
+          <h2>Mercado</h2>
+          <div class="linha cabecalho-tabela">
+            <span>Ativo</span>
+            <span class="dir">PreÃ§o atual</span>
+            <span class="dir">VariaÃ§Ã£o</span>
+          </div>
+          <div id="tabela" class="tabela"></div>
+          <p class="nota">Os preÃ§os sÃ£o atualizados automaticamente pelo servidor.</p>
+        </section>
+
+        <!-- Boleta (envio de ordens) -->
+        <section class="cartao boleta">
+          <h2>Boleta</h2>
+
+          <div class="campo-grupo">
+            <label for="ativo">Selecione o ativo</label>
+            <select id="ativo"></select>
+            <span class="nota" id="posicao"></span>
+          </div>
+
+          <div class="campo-grupo">
+            <label for="qtd">Quantidade</label>
+            <input id="qtd" type="text" inputmode="numeric" value="100" class="mono">
+          </div>
+
+          <div class="campo-grupo">
+            <label for="preco">PreÃ§o (R$)</label>
+            <input id="preco" type="text" inputmode="decimal" value="34,50" class="mono">
+            <span class="nota" id="preco-mercado"></span>
+          </div>
+
+          <div class="botoes">
+            <button id="btn-comprar" type="button" class="btn btn-compra">COMPRAR</button>
+            <button id="btn-vender" type="button" class="btn btn-venda">VENDER</button>
+          </div>
+        </section>
+
+      </div>
+
+
+      <section class="cartao">
+        <h2>Feed de atualizaÃ§Ãµes</h2>
+        <div id="feed" class="feed"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7/bundles/stomp.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+
+
+===== frontend/style.css =====
+
+/* Tema (cores e fontes em um sÃ³ lugar) */
+:root {
+  --bg: #0b1220;
+  --painel: #111a2e;
+  --linha-bg: #0f1830;
+  --borda: #1f2b45;
+  --campo: #2a3856;
+  --texto: #e6ebf5;
+  --suave: #9aa8c4;
+  --azul: #38bdf8;
+  --azul-hover: #7dd3fc;
+  --azul-texto: #06202e;
+  --alta: #34d399;
+  --baixa: #f87171;
+  --compra: #15803d;
+  --venda: #b91c1c;
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--texto);
+  font-family: var(--sans);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.dir {
+  text-align: right;
+}
+
+.cartao {
+  background: var(--painel);
+  border: 1px solid var(--borda);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cartao h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--azul);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logo-grande {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+
+.campo-grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--suave);
+}
+
+.nota {
+  font-size: 12px;
+  color: var(--suave);
+}
+
+input,
+select {
+  height: 46px;
+  width: 100%;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--campo);
+  background: var(--bg);
+  color: var(--texto);
+  font-family: inherit;
+  font-size: 15px;
+}
+
+input::placeholder {
+  color: #7886a3;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: 2px solid var(--azul);
+  outline-offset: 1px;
+}
+
+.btn {
+  height: 48px;
+  border: 0;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-azul {
+  background: var(--azul);
+  color: var(--azul-texto);
+}
+
+.btn-azul:hover {
+  background: var(--azul-hover);
+}
+
+.btn-compra {
+  background: var(--compra);
+  color: #fff;
+}
+
+.btn-venda {
+  background: var(--venda);
+  color: #fff;
+}
+
+.btn-compra:hover,
+.btn-venda:hover {
+  filter: brightness(1.1);
+}
+
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--suave);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.link:hover {
+  color: var(--texto);
+}
+
+/* login pro max */
+.login {
+  position: relative;
+  min-height: 100vh;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.login-fundo {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 45%;
+}
+
+.login-cartao {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  padding: 36px 32px;
+  gap: 22px;
+}
+
+.login-cartao h1 {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sub {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--suave);
+  margin-top: -8px;
+}
+
+/* alternar entre entrar / criar conta */
+.auth-toggle {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--suave);
+  margin-top: -6px;
+}
+
+.link-azul {
+  color: var(--azul);
+  font-weight: 600;
+}
+
+.link-azul:hover {
+  color: var(--azul-hover);
+}
+
+.conta-teste {
+  text-align: center;
+  padding: 10px;
+  border: 1px dashed var(--borda);
+  border-radius: 10px;
+}
+
+#erro-auth {
+  font-size: 13px;
+  margin-top: -8px;
+}
+
+/* mercado geral */
+#tela-mercado {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 32px;
+  background: var(--painel);
+  border-bottom: 1px solid var(--borda);
+}
+
+.topo-esq,
+.topo-dir {
+  display: flex;
+  align-items: center;
+}
+
+.topo-esq {
+  gap: 12px;
+  font-size: 18px;
+}
+
+.topo-dir {
+  gap: 24px;
+}
+
+.saldo {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.saldo span {
+  font-size: 12px;
+  color: var(--suave);
+}
+
+.saldo strong {
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--alta);
+}
+
+.conteudo {
+  flex: 1;
+  padding: 24px 32px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.colunas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.mercado {
+  flex: 3 1 420px;
+  min-width: 0;
+}
+
+.boleta {
+  flex: 2 1 340px;
+  min-width: 0;
+  gap: 18px;
+}
+
+.linha {
+  display: grid;
+  grid-template-columns: 1.2fr 1.4fr 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.cabecalho-tabela {
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--borda);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--suave);
+}
+
+.tabela {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tabela .linha {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--linha-bg);
+}
+
+.tabela .codigo {
+  font-weight: 600;
+}
+
+.nome-empresa {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--suave);
+  margin-left: 6px;
+}
+
+.tabela .preco {
+  font-family: var(--mono);
+  font-size: 15px;
+  text-align: right;
+}
+
+.tabela .variacao {
+  font-family: var(--mono);
+  font-size: 13px;
+  text-align: right;
+}
+
+.botoes {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.botoes .btn {
+  flex: 1;
+}
+
+/* feed massa */
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feed-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.feed-item time {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--suave);
+}
+
+/* cores geral */
+.alta,
+.ok {
+  color: var(--alta);
+}
+
+.baixa,
+.erro {
+  color: var(--baixa);
+}
+
+.neutro {
+  color: var(--suave);
+}
+
+/* responsividade */
+@media (max-width: 600px) {
+
+  .topo,
+  .conteudo {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+===== frontend/app.js =====
+
+
+const MAX_LOGS = 8;
+// Servidores locais sem proxy continuam acessando o backend diretamente.
+const WS_LOCAL = location.protocol === "file:" || ["5173", "5500"].includes(location.port);
+const WS_PROTOCOL = location.protocol === "https:" ? "wss:" : "ws:";
+const WS_HOST = WS_LOCAL ? `${location.hostname || "localhost"}:8086` : location.host;
+const WS_URL = `${WS_PROTOCOL}//${WS_HOST}/ws`;
+const AUTH_BASE = WS_LOCAL ? `${WS_PROTOCOL === "wss:" ? "https:" : "http:"}//${WS_HOST}` : "";
+
+const estado = {
+  saldo: 10000,
+  ativos: [
+    { codigo: "PETR4", nome: "Petrobras", preco: 35.0, base: 35.0 },
+    { codigo: "VALE3", nome: "Vale", preco: 68.0, base: 68.0 },
+    { codigo: "ITUB4", nome: "ItaÃº Unibanco", preco: 30.5, base: 30.5 },
+    { codigo: "MGLU3", nome: "Magazine Luiza", preco: 2.1, base: 2.1 },
+  ],
+  carteira: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
+  logs: [],
+  usuario: null,
+  modoAuth: "login", // "login" ou "register"
+};
+
+const $ = (id) => document.getElementById(id);
+const fmt = new Intl.NumberFormat("pt-BR", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+}).format;
+const agora = () => new Date().toLocaleTimeString("pt-BR", { hour12: false });
+const achar = (codigo) => estado.ativos.find((a) => a.codigo === codigo);
+
+// desenar as telas
+function desenharSaldo() {
+  $("saldo").textContent = "R$ " + fmt(estado.saldo);
+}
+
+function desenharTabela() {
+  $("tabela").innerHTML = estado.ativos
+    .map((a) => {
+      const v = ((a.preco - a.base) / a.base) * 100;
+      const tipo = v > 0.005 ? "alta" : v < -0.005 ? "baixa" : "neutro";
+      const sinal = tipo === "alta" ? "+" : tipo === "baixa" ? "âˆ’" : "";
+      return `
+        <div class="linha">
+          <span class="codigo">${a.codigo}<small class="nome-empresa">${a.nome ? ` Â· ${a.nome}` : ""}</small></span>
+          <span class="preco">R$ ${fmt(a.preco)}</span>
+          <span class="variacao ${tipo}">${sinal}${fmt(Math.abs(v))}%</span>
+        </div>`;
+    })
+    .join("");
+}
+
+function desenharBoleta() {
+  const codigo = $("ativo").value;
+  const pos = estado.carteira[codigo] ?? 0;
+  const ativo = achar(codigo);
+  $("posicao").textContent = `VocÃª possui: ${pos} ${codigo}`;
+  $("preco-mercado").textContent = ativo
+    ? `PreÃ§o de mercado agora: R$ ${fmt(ativo.preco)}`
+    : "";
+}
+
+function desenharFeed() {
+  $("feed").innerHTML = estado.logs
+    .map((l) => `<div class="feed-item"><time>${l.hora}</time><span class="${l.tipo}">${l.msg}</span></div>`)
+    .join("");
+}
+
+function atualizarSelectAtivos() {
+  const sel = $("ativo");
+  const atual = sel.value;
+  sel.innerHTML = estado.ativos
+    .map((a) => `<option value="${a.codigo}">${a.codigo}${a.nome ? ` â€” ${a.nome}` : ""}</option>`)
+    .join("");
+  if (atual && achar(atual)) sel.value = atual;
+}
+
+// atualizacoes do feed
+function log(msg, tipo = "info") {
+  estado.logs.unshift({ hora: agora(), msg, tipo });
+  estado.logs.length = Math.min(estado.logs.length, MAX_LOGS);
+  desenharFeed();
+}
+
+// ponto unico de entrada de preco
+function aplicarPreco(codigo, novoPreco, nome) {
+  let ativo = achar(codigo);
+  if (!ativo) {
+    ativo = { codigo, nome: nome || "", preco: novoPreco, base: novoPreco };
+    estado.ativos.push(ativo);
+    if (estado.carteira[codigo] === undefined) estado.carteira[codigo] = 0;
+    atualizarSelectAtivos();
+  } else if (nome && !ativo.nome) {
+    ativo.nome = nome;
+  }
+  if (novoPreco === ativo.preco) return;
+  ativo.preco = novoPreco;
+  desenharTabela();
+  desenharBoleta();
+  log(`PreÃ§o da ${codigo} atualizou para R$ ${fmt(novoPreco)}.`);
+}
+
+// --- autenticacao REST ---
+
+// conta fixa para demonstracao quando o backend nao esta disponivel
+const CONTA_TESTE = { username: "teste", password: "teste123" };
+
+// erro que indica backend fora do ar (ou rota /auth ainda nao publicada)
+function erroOffline() {
+  const e = new Error("Servidor indisponÃ­vel");
+  e.offline = true;
+  return e;
+}
+
+// faz login ou cadastro no backend e retorna { token, username, ... }
+async function authRest(endpoint, username, password) {
+  let res;
+  try {
+    res = await fetch(`${AUTH_BASE}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw erroOffline(); // falha de rede / CORS / servidor desligado
+  }
+  if (res.status === 404) throw erroOffline(); // backend sem o modulo de auth
+  // corpo pode vir vazio (ex.: 404 sem payload), entao nao quebra se nao for JSON
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // contrato do M2: { type: "AUTH_ERROR", code, message }
+    throw new Error(data.message || data.error || `Erro ${res.status}`);
+  }
+  return data;
+}
+
+// --- modo demonstracao (sem backend) ---
+// mesma forma de resposta do AUTH_SUCCESS do M2, mas sem token
+function contasLocais() {
+  return JSON.parse(localStorage.getItem("contasDemo") || "{}");
+}
+
+function authLocal(endpoint, username, password) {
+  const contas = contasLocais();
+  if (endpoint === "/auth/register") {
+    if (!username || !password) throw new Error("Username e senha sÃ£o obrigatÃ³rios");
+    if (contas[username] || username === CONTA_TESTE.username) {
+      throw new Error("Username jÃ¡ estÃ¡ em uso");
+    }
+    contas[username] = password;
+    localStorage.setItem("contasDemo", JSON.stringify(contas));
+  } else {
+    const ok =
+      (username === CONTA_TESTE.username && password === CONTA_TESTE.password) ||
+      (contas[username] !== undefined && contas[username] === password);
+    if (!ok) throw new Error("UsuÃ¡rio ou senha invÃ¡lidos");
+  }
+  return {
+    token: null,
+    username,
+    balance: 10000,
+    portfolio: { PETR4: 0, VALE3: 0, ITUB4: 0, MGLU3: 0 },
+  };
+}
+
+// tenta o backend; se ele estiver fora, usa o modo demonstracao
+async function autenticar(endpoint, username, password) {
+  try {
+    return await authRest(endpoint, username, password);
+  } catch (e) {
+    if (!e.offline) throw e; // erro real do backend (senha errada, usuario existente...)
+    return authLocal(endpoint, username, password);
+  }
+}
+
+// mostra ou limpa mensagem de erro no formulÃ¡rio de login
+function setErroAuth(msg) {
+  let el = $("erro-auth");
+  if (!el) {
+    el = document.createElement("p");
+    el.id = "erro-auth";
+    el.className = "nota erro";
+    $("form-login").insertBefore(el, $("btn-submit-auth"));
+  }
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+// alterna entre modo "entrar" e "criar conta" na tela de login
+function toggleModoAuth() {
+  estado.modoAuth = estado.modoAuth === "login" ? "register" : "login";
+  const isRegister = estado.modoAuth === "register";
+  $("btn-submit-auth").textContent = isRegister ? "Criar conta" : "Entrar no mercado";
+  $("btn-toggle-auth").textContent = isRegister ? "JÃ¡ tenho conta" : "Criar conta";
+  $("label-toggle-auth").textContent = isRegister ? "JÃ¡ tem conta?" : "NÃ£o tem conta?";
+  setErroAuth("");
+}
+
+// --- conexao websocket/stomp ---
+
+let stomp = null;
+let timerPrecos = null;
+
+// recebe o token JWT e abre a conexÃ£o STOMP autenticada
+function conectarStomp(token) {
+  stomp = new StompJs.Client({
+    brokerURL: WS_URL,
+    connectHeaders: {
+      // token JWT no header do CONNECT â€” backend valida aqui, nao na URL
+      Authorization: `Bearer ${token}`,
+    },
+    reconnectDelay: 5000,
+
+    onConnect: () => {
+      log("Conectado ao servidor do mercado.");
+
+      // para a simulacao local se o server conectou
+      if (timerPrecos) {
+        clearInterval(timerPrecos);
+        timerPrecos = null;
+      }
+
+      // topico publico de mercado
+      stomp.subscribe("/topic/market", (msg) => {
+        try {
+          const evento = JSON.parse(msg.body);
+          const d = evento.data || evento;
+          const cod = d.symbol || d.ticker || d.codigo || d.assetCode;
+          const preco = d.currentPrice ?? d.preco_atual ?? d.price ?? d.preco;
+          const nome = d.name || d.nome || d.nome_empresa || "";
+          if (cod && preco != null) {
+            aplicarPreco(cod, Number(preco), nome);
+          }
+        } catch (e) {
+          console.error("Erro ao ler evento do mercado", e);
+        }
+      });
+
+      // respostas individuais (dados de saldo, carteira ou lista de ativos)
+      stomp.subscribe("/user/queue/replies", (msg) => {
+        try {
+          const resp = JSON.parse(msg.body);
+          const d = resp.data || resp;
+          const tipo = resp.type || "";
+
+          // 1. CatÃ¡logo oficial de ativos (ASSET_LIST)
+          const listaAtivos = Array.isArray(d) ? d : (Array.isArray(resp.ativos) ? resp.ativos : null);
+          if (listaAtivos && (tipo === "ASSET_LIST" || !tipo)) {
+            listaAtivos.forEach((a) => {
+              const cod = a.symbol || a.ticker || a.codigo;
+              const p = a.price ?? a.currentPrice ?? a.preco_atual ?? a.preco;
+              const nome = a.name || a.nome || a.nome_empresa || "";
+              if (cod && p != null) aplicarPreco(cod, Number(p), nome);
+            });
+            log("CatÃ¡logo oficial de ativos sincronizado.", "info");
+          }
+
+          // 2. HistÃ³rico de ordens (ORDER_HISTORY)
+          if (tipo === "ORDER_HISTORY" && Array.isArray(d)) {
+            log(`HistÃ³rico sincronizado: ${d.length} ordem(ns) registrada(s).`, "info");
+          }
+
+          // 3. Status de ordem pontual (ORDER_STATUS)
+          if (tipo === "ORDER_STATUS" && d) {
+            log(`Status da ordem ${d.orderId ? d.orderId.substring(0, 8) : ""}: ${d.status}`, d.status === "ACCEPTED" ? "ok" : "info");
+          }
+
+          // 4. AtualizaÃ§Ãµes de saldo ou carteira
+          const saldo = d.saldo ?? d.balance ?? resp.saldo ?? resp.balance;
+          if (saldo != null) {
+            estado.saldo = Number(saldo);
+            desenharSaldo();
+          }
+          const carteira = d.carteira || d.portfolio || resp.carteira || resp.portfolio;
+          if (carteira) {
+            Object.assign(estado.carteira, carteira);
+            desenharBoleta();
+          }
+        } catch (e) {
+          console.error("Erro na resposta do servidor", e);
+        }
+      });
+
+      // confirmacao ou rejeicao de ordens
+      stomp.subscribe("/user/queue/orders", (msg) => {
+        try {
+          const resp = JSON.parse(msg.body);
+          const d = resp.data || resp;
+          const tipoEvento = resp.type || "";
+
+          const status = d.status || (d.sucesso ? "ACCEPTED" : (d.status === "OK" ? "ACCEPTED" : "REJECTED"));
+          const ehSucesso = status === "ACCEPTED" || status === "OK";
+          const tipoVisual = ehSucesso ? "ok" : "erro";
+
+          // mapeia RejectReason do backend para mensagem amigavel em portugues
+          const razoes = {
+            INVALID_FIELDS: "Dados da ordem invÃ¡lidos.",
+            INVALID_QUANTITY: "Quantidade invÃ¡lida.",
+            INVALID_PRICE: "PreÃ§o invÃ¡lido.",
+            UNKNOWN_ASSET: "Ativo nÃ£o encontrado no mercado.",
+            INSUFFICIENT_FUNDS: "Saldo insuficiente para esta compra.",
+            INSUFFICIENT_SHARES: "VocÃª nÃ£o possui aÃ§Ãµes suficientes para vender.",
+            SYSTEM_BUSY: "Sistema sobrecarregado. Fila cheia.",
+            INTERNAL_ERROR: "Erro interno do servidor.",
+          };
+
+          const ladoDesc = d.side === "BUY" ? "Compra" : d.side === "SELL" ? "Venda" : (d.side || "OperaÃ§Ã£o");
+          const precoFmt = d.price != null ? ` @ R$ ${fmt(d.price)}` : "";
+          const qtdFmt = d.quantity != null ? ` de ${d.quantity} ${d.symbol || ""}` : "";
+
+          if (status === "RECEIVED") {
+            log(`Ordem de ${ladoDesc}${qtdFmt}${precoFmt} recebida pelo backend. Aguardando processamento.`, "info");
+            return;
+          }
+
+          let mensagem;
+          if (ehSucesso) {
+            if (tipoEvento === "ORDER_ACK") {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo backend!`;
+            } else if (tipoEvento === "ORDER_UPDATED") {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita pelo processador. Aguardando execuÃ§Ã£o.`;
+            } else {
+              mensagem = `Ordem de ${ladoDesc}${qtdFmt}${precoFmt} aceita com sucesso!`;
+            }
+
+          } else {
+            mensagem = razoes[d.reason]
+              || d.mensagem
+              || d.message
+              || `Ordem rejeitada: ${d.reason || status}`;
+          }
+
+          log(mensagem, tipoVisual);
+
+          const saldo = d.saldo ?? d.balance;
+          if (saldo != null) {
+            estado.saldo = Number(saldo);
+            desenharSaldo();
+          }
+          const carteira = d.carteira ?? d.portfolio;
+          if (carteira) {
+            Object.assign(estado.carteira, carteira);
+            desenharBoleta();
+          }
+        } catch (e) {
+          console.error("Erro ao processar retorno da ordem", e);
+        }
+      });
+
+      // requisicoes iniciais
+      stomp.publish({ destination: "/app/assets/list", body: "{}" });
+      stomp.publish({ destination: "/app/orders/mine", body: "{}" });
+    },
+
+    onDisconnect: () => {
+      log("Desconectado do servidor.", "erro");
+    },
+
+    onStompError: (frame) => {
+      const msg = frame.headers?.message || "";
+      // token expirado ou invalido â€” limpa e volta para o login
+      if (
+        msg.toLowerCase().includes("token") ||
+        msg.toLowerCase().includes("unauthorized") ||
+        msg.includes("401")
+      ) {
+        log("SessÃ£o expirada. FaÃ§a login novamente.", "erro");
+        localStorage.removeItem("jwtToken");
+        sair();
+      } else {
+        log("Erro STOMP: " + (msg || "falha na conexÃ£o"), "erro");
+      }
+    },
+  });
+
+  stomp.activate();
+}
+
+// envio de ordens
+function enviarOrdem(lado) {
+  const codigo = $("ativo").value;
+  const qtd = parseInt($("qtd").value, 10);
+  const preco = parseFloat($("preco").value.replace(",", "."));
+
+  if (!(qtd > 0) || !(preco > 0)) {
+    return log("Informe uma quantidade e um preÃ§o vÃ¡lidos.", "erro");
+  }
+
+  if (stomp && stomp.connected) {
+    // envia pro backend processar
+    stomp.publish({
+      destination: "/app/orders/create",
+      body: JSON.stringify({
+        clientOrderId: crypto.randomUUID(),   // correlaÃ§Ã£o request â†” resposta
+        symbol: codigo,
+        side: lado === "compra" ? "BUY" : "SELL",
+        quantity: qtd,
+        price: preco.toFixed(2),
+        // userId NÃƒO Ã© enviado pelo frontend â€” o backend injeta via sessÃ£o STOMP
+      }),
+    });
+    log(`Enviando ordem de ${lado} de ${qtd} ${codigo} ao servidor...`);
+  } else {
+    log("Sem conexÃ£o com o servidor. A ordem nÃ£o foi enviada.", "erro");
+  }
+}
+
+// --- navegacao entre telas ---
+
+// tenta login REST; se o servidor estiver fora, entra em modo demonstracao
+async function entrar(nome, senha) {
+  if (!nome) return setErroAuth("Informe um nome de usuÃ¡rio.");
+
+  let token = null;
+
+  try {
+    const data = await autenticar("/auth/login", nome, senha);
+    token = data.token;
+    if (token) localStorage.setItem("jwtToken", token);
+    estado.usuario = data.username || nome;
+
+    // saldo e carteira oficiais vindos do backend (contrato AUTH_SUCCESS)
+    if (data.balance != null) estado.saldo = Number(data.balance);
+    if (data.portfolio) {
+      // zera antes para nao herdar posicoes de um login anterior
+      Object.keys(estado.carteira).forEach((k) => (estado.carteira[k] = 0));
+      Object.assign(estado.carteira, data.portfolio);
+    }
+  } catch (e) {
+    // credenciais erradas ou servidor fora â€” permanece na tela de login
+    setErroAuth(e.message || "Erro ao conectar ao servidor.");
+    return;
+  }
+
+  // transicao para a tela de mercado
+  setErroAuth("");
+  $("tela-login").hidden = true;
+  $("tela-mercado").hidden = false;
+  $("ola").textContent = `OlÃ¡, ${estado.usuario}!`;
+  estado.logs = [];
+  desenharSaldo();
+  desenharTabela();
+  desenharBoleta();
+
+  // conecta STOMP com o token JWT (sem token = modo demonstracao local)
+  if (token) {
+    conectarStomp(token);
+  } else {
+    log("Servidor indisponÃ­vel â€” modo demonstraÃ§Ã£o local.", "erro");
+  }
+
+  // simulacao local de reserva caso o STOMP nao conecte
+  timerPrecos = setInterval(() => {
+    if (stomp && stomp.connected) return;
+    const a = estado.ativos[Math.floor(Math.random() * estado.ativos.length)];
+    const novo = Math.round(a.preco * (1 + (Math.random() - 0.5) * 0.03) * 100) / 100;
+    aplicarPreco(a.codigo, Math.max(0.01, novo));
+  }, 3000);
+}
+
+// cadastra novo usuario e, em seguida, faz login automatico
+async function cadastrar(nome, senha) {
+  if (!nome || !senha) return setErroAuth("Informe usuÃ¡rio e senha para criar conta.");
+
+  try {
+    await autenticar("/auth/register", nome, senha);
+    // cadastro ok â€” loga automaticamente
+    await entrar(nome, senha);
+  } catch (e) {
+    setErroAuth(e.message || "Erro ao criar conta.");
+  }
+}
+
+function sair() {
+  if (timerPrecos) {
+    clearInterval(timerPrecos);
+    timerPrecos = null;
+  }
+  if (stomp) {
+    stomp.deactivate();
+    stomp = null;
+  }
+  localStorage.removeItem("jwtToken");
+  $("tela-mercado").hidden = true;
+  $("tela-login").hidden = false;
+}
+
+// ligacao entre os eventos
+atualizarSelectAtivos();
+
+$("ativo").addEventListener("change", () => {
+  const ativo = achar($("ativo").value);
+  if (ativo) $("preco").value = fmt(ativo.preco);
+  desenharBoleta();
+});
+
+$("form-login").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const nome = $("usuario").value.trim();
+  const senha = $("senha").value;
+  if (estado.modoAuth === "register") {
+    cadastrar(nome, senha);
+  } else {
+    entrar(nome, senha);
+  }
+});
+
+$("btn-toggle-auth").addEventListener("click", toggleModoAuth);
+$("btn-sair").addEventListener("click", sair);
+$("btn-comprar").addEventListener("click", () => enviarOrdem("compra"));
+$("btn-vender").addEventListener("click", () => enviarOrdem("venda"));
+
+
+===== frontend/app.test.cjs =====
+
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+function conectarFrontend() {
+  const elementos = new Map();
+  const inscricoes = new Map();
+  const contexto = vm.createContext({
+    console,
+    location: { protocol: "http:", port: "8081", host: "localhost:8081", hostname: "localhost" },
+    document: {
+      getElementById(id) {
+        if (!elementos.has(id)) {
+          elementos.set(id, { value: "PETR4", innerHTML: "", textContent: "", addEventListener() {} });
+        }
+        return elementos.get(id);
+      },
+    },
+    StompJs: {
+      Client: class {
+        constructor(config) { this.config = config; }
+        activate() { this.config.onConnect(); }
+        subscribe(destino, handler) { inscricoes.set(destino, handler); }
+        publish() {}
+      },
+    },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "app.js"), "utf8"), contexto);
+  vm.runInContext('conectarStomp("jwt-de-teste")', contexto);
+  return {
+    receber(type, data) {
+      inscricoes.get("/user/queue/orders")({ body: JSON.stringify({ type, data }) });
+    },
+    estado() {
+      return JSON.parse(vm.runInContext("JSON.stringify(estado)", contexto));
+    },
+    enviarSemConexao(lado) {
+      vm.runInContext('document.getElementById("qtd").value = "1"; document.getElementById("preco").value = "35,00";', contexto);
+      vm.runInContext(`enviarOrdem(${JSON.stringify(lado)})`, contexto);
+    },
+  };
+}
+
+test("RECEIVED informa recebimento sem simular uma negociaÃ§Ã£o", () => {
+  const frontend = conectarFrontend();
+  frontend.receber("ORDER_ACK", { status: "RECEIVED", side: "BUY", symbol: "PETR4", quantity: 1, price: "35.00" });
+  const estado = frontend.estado();
+  assert.match(estado.logs[0].msg, /recebida.*Aguardando processamento/);
+  assert.equal(estado.logs[0].tipo, "info");
+  assert.equal(estado.saldo, 10000);
+  assert.equal(estado.carteira.PETR4, 0);
+});
+
+test("ACCEPTED de compra ou venda, inclusive repetido, nÃ£o altera saldo ou posiÃ§Ãµes", () => {
+  const frontend = conectarFrontend();
+  for (const side of ["BUY", "SELL", "BUY"]) {
+    frontend.receber("ORDER_UPDATED", { status: "ACCEPTED", side, symbol: "PETR4", quantity: 1, price: "35.00" });
+    const estado = frontend.estado();
+    assert.match(estado.logs[0].msg, /aceita.*Aguardando execuÃ§Ã£o/);
+    assert.equal(estado.logs[0].tipo, "ok");
+    assert.equal(estado.saldo, 10000);
+    assert.equal(estado.carteira.PETR4, 0);
+  }
+});
+
+test("saldo e carteira explÃ­citos do servidor sÃ£o aplicados sem cÃ¡lculos locais", () => {
+  const frontend = conectarFrontend();
+  const ordem = { status: "ACCEPTED", side: "BUY", symbol: "PETR4", quantity: 1, price: "35.00" };
+  for (let i = 0; i < 2; i++) {
+    frontend.receber("ORDER_UPDATED", { ...ordem, balance: 9900, portfolio: { PETR4: 0 } });
+    assert.equal(frontend.estado().saldo, 9900);
+    assert.equal(frontend.estado().carteira.PETR4, 0);
+  }
+  frontend.receber("ORDER_UPDATED", { ...ordem, saldo: 9800, carteira: { PETR4: 2 } });
+  assert.equal(frontend.estado().saldo, 9800);
+  assert.equal(frontend.estado().carteira.PETR4, 2);
+});
+
+test("sem STOMP conectado nÃ£o hÃ¡ negociaÃ§Ã£o local nem confirmaÃ§Ã£o falsa", () => {
+  const frontend = conectarFrontend();
+  for (const lado of ["compra", "venda"]) {
+    frontend.enviarSemConexao(lado);
+    const estado = frontend.estado();
+    assert.equal(estado.saldo, 10000);
+    assert.equal(estado.carteira.PETR4, 0);
+    assert.equal(estado.logs[0].tipo, "erro");
+    assert.match(estado.logs[0].msg, /A ordem nÃ£o foi enviada/);
+  }
+});
+
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/orders/OrderController.java =====
+
+package br.ufs.simulador_bolsa.orders;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.annotation.SendToUser;
+import org.springframework.stereotype.Controller;
+
+import br.ufs.simulador_bolsa.communication.MarketEvent;
+
+//Ã© o controller das ordens
+//o @Controller Ã© o aviso ao spring que vai ser roteamento de msg STOMP
+@RequiredArgsConstructor
+@Controller
+public class OrderController {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderController.class);
+
+    private final OrderService orderService;
+    private final CurrentUserResolver users;
+
+    //Ã© por onde a ordem chega
+    @MessageMapping("/orders/create")
+    //envia a resposta somente para o user que enviou a ordem
+    @SendToUser(destinations = "/queue/orders", broadcast = false)
+    public MarketEvent<OrderResult> submit(SubmitOrderMessage message, SimpMessageHeaderAccessor headers) {
+        String userId = users.resolve(headers);//pega o user
+        SubmitOrderMessage body = message != null ? message //validaÃ§Ã£o caso a ordem seja toda vazia
+                : new SubmitOrderMessage(null, null, null, null, null);
+
+        //processa a ordem lÃ¡ no orderSertvice
+        OrderResult result = orderService.submit(body.toRequest(userId));
+        //e retorna a confirmaÃ§Ã£o
+        return event("ORDER_ACK", result.clientOrderId(), result);
+    }
+
+    //consulta o status atual de uma ordem
+    @MessageMapping("/orders/status")
+    @SendToUser(destinations = "/queue/replies", broadcast = false)
+    public MarketEvent<OrderResult> status(OrderStatusMessage message, SimpMessageHeaderAccessor headers) {
+        String userId = users.resolve(headers);
+        String orderId = message != null ? message.orderId() : null;
+
+        return orderService.findByIdForUser(orderId, userId)
+                .map(order -> event("ORDER_STATUS", order.clientOrderId(), OrderResult.of(order)))
+                .orElseGet(() -> event("ORDER_NOT_FOUND", orderId, null));
+    }
+
+    //historico de ordens do user, ordenada das mais antigas para as mais recentes
+    @MessageMapping("/orders/mine")
+    @SendToUser(destinations = "/queue/replies", broadcast = false)
+    public MarketEvent<List<OrderResult>> myOrders(SimpMessageHeaderAccessor headers) {
+        String userId = users.resolve(headers);
+        List<OrderResult> orders = orderService.findByUser(userId).stream()
+                .map(OrderResult::of)
+                .toList();
+        return event("ORDER_HISTORY", null, orders);
+    }
+
+    //exception para caso o usuario tenha enviado json quebrado ou algo assim
+    @MessageExceptionHandler
+    @SendToUser(destinations = "/queue/orders", broadcast = false)
+    public MarketEvent<OrderResult> handleMalformedMessage(Exception exception) {
+        log.warn("ORDER_MALFORMED_MESSAGE {}", exception.toString());
+        //retorna a msg de dados invÃ¡lidos
+        return event("ORDER_ACK", null, OrderResult.rejected(null, RejectReason.INVALID_FIELDS));
+    }
+
+    //marca o evento com o data hora e id do evento
+    private static <T> MarketEvent<T> event(String type, String requestId, T data) {
+        return new MarketEvent<>(type, requestId, UUID.randomUUID(), Instant.now(), data);
+    }
+}
+
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/orders/AssetController.java =====
+
+package br.ufs.simulador_bolsa.orders;
+
+import br.ufs.simulador_bolsa.communication.MarketEvent;
+import br.ufs.simulador_bolsa.market.Asset;
+import br.ufs.simulador_bolsa.market.AssetCatalog;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.annotation.SendToUser;
+import org.springframework.stereotype.Controller;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
+//preferi desacoplar o controller das aÃ§Ãµes
+@RequiredArgsConstructor
+@Controller
+public class AssetController {
+
+    private final AssetCatalog catalog;
+
+    //pega as aÃ§Ãµes negociaveis no catÃ¡logo(lista)
+    @MessageMapping("/assets/list")
+    @SendToUser(destinations = "/queue/replies", broadcast = false)
+    public MarketEvent<List<Asset>> listAssets() {
+        return new MarketEvent<>("ASSET_LIST", null, UUID.randomUUID(), Instant.now(), catalog.listAll());
+    }
+}
+
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/orders/StompOrderNotifier.java =====
+
+package br.ufs.simulador_bolsa.orders;
+
+import java.time.Instant;
+import java.util.UUID;
+
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Component;
+
+import br.ufs.simulador_bolsa.communication.MarketEvent;
+
+/*
+ * essa classe Ã© a que realmente vai implementar a OrderNotifier, vai enviar o resultado pelo STOMP para o dono
+ * pelo /user/queue/orders
+ */
+@RequiredArgsConstructor
+@Component
+public class StompOrderNotifier implements OrderNotifier {
+
+    private final SimpMessagingTemplate messagingTemplate;
+
+    @Override
+    public void orderUpdated(Order order) {
+        var event = new MarketEvent<>(
+                "ORDER_UPDATED",
+                order.clientOrderId(),
+                UUID.randomUUID(),
+                Instant.now(),
+                OrderResult.of(order));
+
+        messagingTemplate.convertAndSendToUser(order.userId(), "/queue/orders", event);
+    }
+}
+
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/orders/OrderResult.java =====
+
+package br.ufs.simulador_bolsa.orders;
+
+import java.math.BigDecimal;
+
+//se o OrderRequest Ã© como chega do cliente
+//o Result(ou response) Ã© como sai para o cliente
+public record OrderResult(
+        String orderId,
+        String clientOrderId,
+        String symbol,
+        OrderSide side,
+        Long quantity,
+        BigDecimal price,
+        OrderStatus status,
+        RejectReason reason
+) {
+    public static OrderResult of(Order order) {
+        return new OrderResult(
+                order.orderId(),
+                order.clientOrderId(),
+                order.symbol(),
+                order.side(),
+                order.quantity(),
+                order.price(),
+                order.status(),
+                order.rejectReason());
+    }
+
+    public static OrderResult rejected(OrderRequest request, RejectReason reason) {
+        return new OrderResult(
+                null,
+                request == null ? null : request.clientOrderId(),
+                request == null ? null : request.symbol(),
+                request == null ? null : request.side(),
+                request == null ? null : request.quantity(),
+                request == null ? null : request.price(),
+                OrderStatus.REJECTED,
+                reason);
+    }
+}
+
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/orders/SubmitOrderMessage.java =====
+
+package br.ufs.simulador_bolsa.orders;
+
+import java.math.BigDecimal;
+import java.util.Locale;
+
+//Ã© o corpo JSON que envia
+public record SubmitOrderMessage(
+        String clientOrderId,
+        String symbol,
+        String side,
+        Long quantity,
+        String price
+) {
+
+    //deixa salvo no record temporario
+    public OrderRequest toRequest(String userId) {
+        return new OrderRequest(userId, clientOrderId, symbol, parseSide(side), quantity, parsePrice(price));
+    }
+
+    //o restante sÃ£o as validaÃ§Ãµes
+    private static OrderSide parseSide(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return OrderSide.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static BigDecimal parsePrice(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return new BigDecimal(value.trim().replace(',', '.'));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}
+
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/communication/MarketEvent.java =====
+
+package br.ufs.simulador_bolsa.communication;
+
+import java.time.Instant;
+import java.util.UUID;
+
+public record MarketEvent<T>(
+        String type,
+        String requestId,
+        UUID eventId,
+        Instant timestamp,
+        T data
+) {
+}
+
+===== backend/src/main/java/br/ufs/simulador_bolsa/auth/dto/AuthResponse.java =====
+
+package br.ufs.simulador_bolsa.auth.dto;
+
+import java.math.BigDecimal;
+import java.util.Map;
+
+public record AuthResponse(
+    String type,
+    String token,
+    Long userId,
+    String username,
+    BigDecimal balance,
+    Map<String, Integer> portfolio
+) {}
+
+
+===== backend/src/main/resources/schema.sql =====
+
+CREATE TABLE IF NOT EXISTS usuarios (
+    id BIGSERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,      
+    nome VARCHAR(100),                         
+    email VARCHAR(100) UNIQUE,                 
+    senha_hash VARCHAR(255) NOT NULL,          
+    saldo NUMERIC(15, 2) NOT NULL DEFAULT 10000.00,
+    criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessoes_usuario (
+    id BIGSERIAL PRIMARY KEY,
+    session_id VARCHAR(255) UNIQUE NOT NULL,
+    usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    conectado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    desconectado_em TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS participantes_mercado (
+    id BIGSERIAL PRIMARY KEY,
+    usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    entrou_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    saiu_em TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ativos (
+    id BIGSERIAL PRIMARY KEY,
+    ticker VARCHAR(10) UNIQUE NOT NULL,
+    nome_empresa VARCHAR(100) NOT NULL,
+    preco_atual NUMERIC(15, 2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS carteiras (
+    usuario_id BIGINT REFERENCES usuarios(id) ON DELETE CASCADE,
+    ativo_id BIGINT REFERENCES ativos(id) ON DELETE CASCADE,
+    quantidade INT NOT NULL DEFAULT 0,
+    preco_medio NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    PRIMARY KEY (usuario_id, ativo_id)
+);
+
+CREATE TABLE IF NOT EXISTS ordens (
+    id BIGSERIAL PRIMARY KEY,
+    usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+    ativo_id BIGINT NOT NULL REFERENCES ativos(id) ON DELETE RESTRICT,
+    tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('COMPRA', 'VENDA')),
+    quantidade INT NOT NULL CHECK (quantidade > 0),
+    preco_alvo NUMERIC(15, 2) NOT NULL CHECK (preco_alvo > 0),
+    status VARCHAR(20) NOT NULL DEFAULT 'ABERTA' CHECK (status IN ('ABERTA', 'EXECUTADA', 'CANCELADA')),
+    criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS historico_negociacoes (
+    id BIGSERIAL PRIMARY KEY,
+    ordem_compra_id BIGINT NOT NULL REFERENCES ordens(id),
+    ordem_venda_id BIGINT NOT NULL REFERENCES ordens(id),
+    ativo_id BIGINT NOT NULL REFERENCES ativos(id),
+    quantidade_executada INT NOT NULL CHECK (quantidade_executada > 0),
+    preco_executado NUMERIC(15, 2) NOT NULL CHECK (preco_executado > 0),
+    executado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

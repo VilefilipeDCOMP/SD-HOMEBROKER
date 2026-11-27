@@ -352,3 +352,122 @@ test("detecta desconexão, bloqueia operações offline e recarrega snapshot com
   assert.equal(env.estado().negocios.length, 1);
   assert.equal(env.estado().negocios[0].total, 1740);
 });
+
+test("confirma sincronização na reconexão somente após aplicar todos os 5 snapshots", () => {
+  const env = criarAmbienteCompleto();
+
+  // na conexao inicial, os pedidos foram enviados, mas a sincronizacao ainda aguarda respostas
+  assert.equal(env.estado().conexao.sincronizando, true);
+  assert.equal(env.estado().conexao.ultimaSincronizacao, null);
+
+  env.simularQueda();
+  assert.equal(env.estado().conexao.sincronizando, false);
+
+  env.simularReconexao();
+  assert.equal(env.estado().conexao.sincronizando, true);
+  assert.equal(env.estado().conexao.ultimaSincronizacao, null);
+  assert.equal(env.estado().alerta, null);
+  assert.ok(!env.estado().logs.some((l) => /Estado completo recarregado/.test(l.msg)));
+
+  // aplica 4 dos 5 snapshots: ainda nao deve confirmar a sincronizacao completa
+  env.receberEm("/user/queue/replies", {
+    type: "ASSET_LIST",
+    data: [{ symbol: "PETR4", name: "Petrobras PN", currentPrice: 35.4, volume: 120 }],
+  });
+  env.receberEm("/user/queue/replies", {
+    type: "WALLET_SNAPSHOT",
+    data: { balance: 9500, reservedBalance: 0, positions: [] },
+  });
+  env.receberEm("/user/queue/replies", {
+    type: "ORDER_BOOK_SNAPSHOT",
+    data: { symbol: "PETR4", bids: [{ price: 35.3, quantity: 10 }], asks: [] },
+  });
+  env.receberEm("/user/queue/replies", {
+    type: "ORDER_HISTORY",
+    data: [],
+  });
+
+  assert.equal(env.estado().conexao.sincronizando, true);
+  assert.deepEqual(env.estado().conexao.pendentesSincronizacao, ["TRADE_HISTORY"]);
+  assert.equal(env.estado().conexao.ultimaSincronizacao, null);
+  assert.equal(env.estado().alerta, null);
+
+  // aplica o 5o snapshot restante: agora deve confirmar a sincronizacao
+  env.receberEm("/user/queue/replies", {
+    type: "TRADE_HISTORY",
+    data: [],
+  });
+
+  const estFinal = env.estado();
+  assert.equal(estFinal.conexao.sincronizando, false);
+  assert.deepEqual(estFinal.conexao.pendentesSincronizacao, []);
+  assert.notEqual(estFinal.conexao.ultimaSincronizacao, null);
+  assert.equal(estFinal.logs[0].tipo, "ok");
+  assert.match(estFinal.logs[0].msg, /Estado completo recarregado/);
+  assert.equal(estFinal.alerta.tipo, "ok");
+  assert.match(estFinal.alerta.msg, /Ativos, carteira, livro, ordens e negociações sincronizados/);
+});
+
+test("terceiro cliente desconectado exibe volume negociado uma única vez ao reconectar", () => {
+  const cliente1 = criarAmbienteCompleto();
+  const cliente2 = criarAmbienteCompleto();
+  const cliente3 = criarAmbienteCompleto();
+
+  // cliente 3 desconecta antes da negociacao entre cliente 1 e cliente 2
+  cliente3.simularQueda();
+
+  const eventoNegocio = {
+    type: "TRADE_EXECUTED",
+    data: {
+      tradeId: "tr-vol-1",
+      symbol: "PETR4",
+      quantity: 30,
+      price: 35.75,
+      volume: 30,
+      buyerUsername: "cliente1",
+      sellerUsername: "cliente2",
+    },
+  };
+
+  // clientes conectados recebem o evento (inclusive se chegar em ambos os topicos) sem duplicar volume
+  cliente1.receberEm("/topic/market", eventoNegocio);
+  cliente1.receberEm("/topic/trades", eventoNegocio);
+  cliente2.receberEm("/topic/market", eventoNegocio);
+
+  assert.equal(cliente1.estado().ativos.find((a) => a.codigo === "PETR4").volume, 30);
+  assert.equal(cliente2.estado().ativos.find((a) => a.codigo === "PETR4").volume, 30);
+  assert.equal(cliente3.estado().ativos.find((a) => a.codigo === "PETR4").volume, 0);
+
+  // cliente 3 reconecta e recebe o ASSET_LIST com o volume acumulado vindo do backend
+  cliente3.simularReconexao();
+  cliente3.receberEm("/user/queue/replies", {
+    type: "ASSET_LIST",
+    data: [
+      { symbol: "ITUB4", name: "Itaú Unibanco PN", currentPrice: 30.5, volume: 0 },
+      { symbol: "MGLU3", name: "Magazine Luiza ON", currentPrice: 2.1, volume: 0 },
+      { symbol: "PETR4", name: "Petrobras PN", currentPrice: 35.75, volume: 30 },
+      { symbol: "VALE3", name: "Vale ON", currentPrice: 68.0, volume: 0 },
+    ],
+  });
+  cliente3.receberEm("/user/queue/replies", {
+    type: "TRADE_HISTORY",
+    data: [
+      { tradeId: "tr-vol-1", symbol: "PETR4", side: "BUY", quantity: 30, price: 35.75 },
+    ],
+  });
+
+  // mesmo que um frame atrasado sem campo volume chegue para o mesmo tradeId, nao soma duas vezes
+  cliente3.receberEm("/topic/market", {
+    type: "TRADE_EXECUTED",
+    data: {
+      tradeId: "tr-vol-1",
+      symbol: "PETR4",
+      quantity: 30,
+      price: 35.75,
+    },
+  });
+
+  const petrCliente3 = cliente3.estado().ativos.find((a) => a.codigo === "PETR4");
+  assert.equal(petrCliente3.preco, 35.75);
+  assert.equal(petrCliente3.volume, 30);
+});

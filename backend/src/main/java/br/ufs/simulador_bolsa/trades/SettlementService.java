@@ -95,14 +95,33 @@ public class SettlementService implements SettlementPort {
             if (metricsService != null) {
                 metricsService.recordTradeExecuted(trade.quantity(), trade.price(), latencyMs);
             }
-            if (assetCatalog != null) {
-                assetCatalog.updatePrice(trade.buy().symbol(), trade.price());
+
+            long resolvedVolume = trade.quantity();
+            if (tradeRepository != null) {
+                Long persistedVolume = tradeRepository.sumVolumeByTicker(trade.buy().symbol());
+                if (persistedVolume != null && persistedVolume > 0) {
+                    resolvedVolume = persistedVolume;
+                }
             }
-            log.info("TRADE_EXECUTED tradeId={} buyOrderId={} sellOrderId={} symbol={} qty={} price={} latencyMs={}",
+            final long totalVolume = resolvedVolume;
+
+            log.info("TRADE_EXECUTED tradeId={} buyOrderId={} sellOrderId={} symbol={} qty={} price={} volume={} latencyMs={}",
                     saved.getId(), trade.buy().orderId(), trade.sell().orderId(),
-                    trade.buy().symbol(), trade.quantity(), trade.price(),
+                    trade.buy().symbol(), trade.quantity(), trade.price(), totalVolume,
                     String.format(java.util.Locale.ROOT, "%.3f", latencyMs));
-            broadcastTradeExecuted(saved, trade);
+
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        atualizarCatalogoAposNegocio(trade, totalVolume);
+                        broadcastTradeExecuted(saved, trade, totalVolume);
+                    }
+                });
+            } else {
+                atualizarCatalogoAposNegocio(trade, totalVolume);
+                broadcastTradeExecuted(saved, trade, totalVolume);
+            }
         } else {
             log.error("SETTLEMENT_REJECTED_MISSING_PERSISTED_ID buyOrderId={} buyDbId={} sellOrderId={} sellDbId={}",
                     trade.buy().orderId(), buyDbId, trade.sell().orderId(), sellDbId);
@@ -110,7 +129,16 @@ public class SettlementService implements SettlementPort {
         }
     }
 
-    private void broadcastTradeExecuted(TradeEntity saved, Trade trade) {
+    private void atualizarCatalogoAposNegocio(Trade trade, long totalVolume) {
+        if (assetCatalog == null) return;
+        if (tradeRepository != null) {
+            assetCatalog.syncMarketData(trade.buy().symbol(), null, trade.price(), totalVolume);
+        } else {
+            assetCatalog.recordTrade(trade.buy().symbol(), trade.price(), trade.quantity());
+        }
+    }
+
+    private void broadcastTradeExecuted(TradeEntity saved, Trade trade, long totalVolume) {
         if (eventPublisher == null) return;
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -118,6 +146,7 @@ public class SettlementService implements SettlementPort {
             payload.put("symbol", trade.buy().symbol());
             payload.put("quantity", trade.quantity());
             payload.put("price", trade.price());
+            payload.put("volume", totalVolume);
             payload.put("buyerUsername", trade.buy().userId());
             payload.put("sellerUsername", trade.sell().userId());
             payload.put("executedAt", Instant.now().toString());

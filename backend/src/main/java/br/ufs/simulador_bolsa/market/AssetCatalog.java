@@ -51,8 +51,44 @@ public class AssetCatalog {
         return findBySymbol(symbol).isPresent();
     }
 
-    //"muda" aquele imutavel, na real ele cria um novo Asset com o mesmo simbolo e o nome, só muda o preco
+    //"muda" aquele imutavel, na real ele cria um novo Asset mantendo simbolo, nome e volume, só muda o preco
     public void updatePrice(String symbol, BigDecimal newPrice) {
-        assets.computeIfPresent(symbol, (key, old) -> new Asset(old.symbol(), old.name(), newPrice));
+        if (symbol == null || newPrice == null) {
+            return;
+        }
+        String normalized = symbol.trim().toUpperCase(Locale.ROOT);
+        assets.computeIfPresent(normalized, (key, old) -> new Asset(old.symbol(), old.name(), newPrice, old.volume()));
+    }
+
+    //atualiza o preco e acumula a quantidade negociada no volume do ativo
+    public long recordTrade(String symbol, BigDecimal newPrice, long quantity) {
+        if (symbol == null) {
+            return 0L;
+        }
+        String normalized = symbol.trim().toUpperCase(Locale.ROOT);
+        Asset updated = assets.computeIfPresent(normalized, (key, old) -> new Asset(
+                old.symbol(),
+                old.name(),
+                newPrice != null ? newPrice : old.currentPrice(),
+                old.volume() + Math.max(0L, quantity)
+        ));
+        return updated != null ? updated.volume() : Math.max(0L, quantity);
+    }
+
+    //sincroniza preco e volume em memoria com os valores consolidados no banco
+    public void syncMarketData(String symbol, String name, BigDecimal currentPrice, long volume) {
+        if (symbol == null) {
+            return;
+        }
+        String normalized = symbol.trim().toUpperCase(Locale.ROOT);
+        assets.compute(normalized, (key, old) -> {
+            String resolvedName = (name != null && !name.isBlank())
+                    ? name
+                    : (old != null ? old.name() : normalized);
+            BigDecimal resolvedPrice = currentPrice != null
+                    ? currentPrice
+                    : (old != null ? old.currentPrice() : BigDecimal.ZERO);
+            return new Asset(normalized, resolvedName, resolvedPrice, Math.max(0L, volume));
+        });
     }
 }

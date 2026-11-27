@@ -35,6 +35,13 @@ const LABELS_STATUS = {
 };
 
 const STATUS_CANCELAVEIS = new Set(["RECEIVED", "ACCEPTED", "OPEN", "PARTIALLY_FILLED"]);
+const ETAPAS_SINCRONIZACAO = [
+  "ASSET_LIST",
+  "WALLET_SNAPSHOT",
+  "ORDER_BOOK_SNAPSHOT",
+  "ORDER_HISTORY",
+  "TRADE_HISTORY",
+];
 
 const estado = {
   saldo: 10000,
@@ -66,6 +73,9 @@ const estado = {
     jaConectou: false,
     tentativas: 0,
     ultimaSincronizacao: null,
+    sincronizando: false,
+    origemSincronizacao: null,
+    pendentesSincronizacao: [],
   },
   alerta: null,
   logs: [],
@@ -348,8 +358,9 @@ function aplicarPreco(codigo, novoPreco, nome, extras = {}) {
     estado.ativos.push(ativo);
     garantirPosicao(codigo);
     adicionou = true;
-  } else if (nome && !ativo.nome) {
+  } else if (nome && nome !== ativo.nome) {
     ativo.nome = nome;
+    adicionou = true;
   }
 
   let mudou = adicionou;
@@ -903,6 +914,38 @@ let stomp = null;
 let timerPrecos = null;
 let tokenAtual = null;
 let saindoVoluntariamente = false;
+const tradesProcessados = new Set();
+let volumesDuranteSync = {};
+
+function cancelarSincronizacaoPendente() {
+  estado.conexao.sincronizando = false;
+  estado.conexao.origemSincronizacao = null;
+  estado.conexao.pendentesSincronizacao = [];
+  volumesDuranteSync = {};
+}
+
+// confirma a sincronizacao somente quando todos os 5 snapshots forem aplicados
+function concluirEtapaSincronizacao(etapa) {
+  if (!estado.conexao.sincronizando) return;
+  estado.conexao.pendentesSincronizacao = estado.conexao.pendentesSincronizacao.filter((item) => item !== etapa);
+  if (estado.conexao.pendentesSincronizacao.length > 0) return;
+
+  const origem = estado.conexao.origemSincronizacao;
+  estado.conexao.sincronizando = false;
+  estado.conexao.origemSincronizacao = null;
+  volumesDuranteSync = {};
+  estado.conexao.ultimaSincronizacao = agora();
+
+  if (origem === "reconexao") {
+    log("Reconectado ao servidor. Estado completo recarregado.", "ok");
+    mostrarAlerta("Conexão restabelecida. Ativos, carteira, livro, ordens e negociações sincronizados.", "ok");
+  } else if (origem === "manual") {
+    log("Estado completo sincronizado com o servidor.", "ok");
+    mostrarAlerta("Sincronização concluída: ativos, carteira, livro, ordens e negociações atualizados.", "ok");
+  } else {
+    log("Estado inicial sincronizado com o servidor.", "ok");
+  }
+}
 
 // solicita snapshot completo ao backend no login e apos cada reconexao
 function recarregarEstadoCompleto(ehReconexao = false, exigirConectado = false) {
@@ -910,6 +953,18 @@ function recarregarEstadoCompleto(ehReconexao = false, exigirConectado = false) 
   if (exigirConectado && !stomp.connected) {
     mostrarAlerta("Sem conexão com o servidor para sincronizar o estado.", "erro");
     return false;
+  }
+
+  const preservarReconexao = estado.conexao.sincronizando && estado.conexao.origemSincronizacao === "reconexao";
+  estado.conexao.sincronizando = true;
+  estado.conexao.origemSincronizacao = (ehReconexao || preservarReconexao)
+    ? "reconexao"
+    : (exigirConectado ? "manual" : "inicial");
+  estado.conexao.pendentesSincronizacao = [...ETAPAS_SINCRONIZACAO];
+  volumesDuranteSync = {};
+
+  if (ehReconexao) {
+    log("Conexão restabelecida. Solicitando snapshots ao servidor...", "info");
   }
 
   stomp.publish({ destination: "/app/assets/list", body: "{}" });
@@ -921,11 +976,6 @@ function recarregarEstadoCompleto(ehReconexao = false, exigirConectado = false) 
     body: JSON.stringify({ symbol: estado.ativoSelecionado }),
   });
 
-  estado.conexao.ultimaSincronizacao = agora();
-  if (ehReconexao) {
-    log("Reconectado ao servidor. Estado completo recarregado.", "ok");
-    mostrarAlerta("Conexão restabelecida. Carteira, mercado, livro e ordens sincronizados.", "ok");
-  }
   return true;
 }
 
@@ -953,9 +1003,25 @@ function tratarEventoMercado(msg) {
       const cod = d.symbol || d.ticker || d.codigo;
       const preco = d.price ?? d.preco ?? d.preco_executado;
       const ativo = achar(cod);
-      const vol = d.volume != null
-        ? Number(d.volume)
-        : (ativo ? (ativo.volume || 0) + Number(d.quantity ?? d.quantidade ?? 0) : Number(d.quantity ?? 0));
+      const idNegocio = d.tradeId != null ? String(d.tradeId) : (d.id != null ? String(d.id) : null);
+      const jaContabilizado = Boolean(idNegocio && tradesProcessados.has(idNegocio));
+      if (idNegocio) {
+        tradesProcessados.add(idNegocio);
+      }
+
+      let vol;
+      if (d.volume != null && Number.isFinite(Number(d.volume))) {
+        vol = Number(d.volume);
+        if (estado.conexao.sincronizando && cod) {
+          volumesDuranteSync[cod] = Math.max(volumesDuranteSync[cod] || 0, vol);
+        }
+      } else if (jaContabilizado) {
+        vol = ativo ? (ativo.volume || 0) : 0;
+      } else {
+        const qtd = Number(d.quantity ?? d.quantidade ?? 0);
+        vol = ativo ? (ativo.volume || 0) + qtd : qtd;
+      }
+
       if (cod && preco != null) {
         aplicarPreco(cod, Number(preco), d.name || "", { volume: vol });
       }
@@ -993,9 +1059,13 @@ function tratarRespostaPrivada(msg) {
         const cod = a.symbol || a.ticker || a.codigo;
         const p = a.price ?? a.currentPrice ?? a.preco_atual ?? a.preco;
         const nome = a.name || a.nome || a.nome_empresa || "";
+        const volRecebido = a.volume ?? a.tradedVolume;
+        const volFinal = volRecebido != null
+          ? Math.max(Number(volRecebido), volumesDuranteSync[cod] || 0)
+          : undefined;
         if (cod && p != null) {
           aplicarPreco(cod, Number(p), nome, {
-            volume: a.volume ?? a.tradedVolume,
+            volume: volFinal,
             melhorCompra: a.bestBid !== undefined ? a.bestBid : undefined,
             melhorVenda: a.bestAsk !== undefined ? a.bestAsk : undefined,
             silencioso: true,
@@ -1003,6 +1073,7 @@ function tratarRespostaPrivada(msg) {
         }
       });
       log("Catálogo oficial de ativos sincronizado.", "info");
+      concluirEtapaSincronizacao("ASSET_LIST");
       return;
     }
 
@@ -1011,6 +1082,7 @@ function tratarRespostaPrivada(msg) {
       aplicarSnapshotCarteira(d, tipo === "WALLET_SNAPSHOT");
       if (tipo === "WALLET_SNAPSHOT") {
         log("Carteira sincronizada com o servidor.", "info");
+        concluirEtapaSincronizacao("WALLET_SNAPSHOT");
       }
       return;
     }
@@ -1022,6 +1094,10 @@ function tratarRespostaPrivada(msg) {
       } else if (d) {
         aplicarLivro(d.symbol || d.ticker || estado.ativoSelecionado, d);
       }
+      if (tipo === "ORDER_BOOK_SNAPSHOT") {
+        log(`Livro de ofertas (${estado.ativoSelecionado}) sincronizado.`, "info");
+        concluirEtapaSincronizacao("ORDER_BOOK_SNAPSHOT");
+      }
       return;
     }
 
@@ -1030,14 +1106,19 @@ function tratarRespostaPrivada(msg) {
       estado.ordens = d.map(normalizarOrdem).reverse();
       desenharOrdens();
       log(`Histórico sincronizado: ${d.length} ordem(ns) registrada(s).`, "info");
+      concluirEtapaSincronizacao("ORDER_HISTORY");
       return;
     }
 
     // 5. historico de negociacoes do usuario
     if (tipo === "TRADE_HISTORY" && Array.isArray(d)) {
       estado.negocios = d.map(normalizarNegocio).slice(0, MAX_NEGOCIOS);
+      estado.negocios.forEach((n) => {
+        if (n.tradeId) tradesProcessados.add(String(n.tradeId));
+      });
       desenharNegocios();
       log(`Negociações sincronizadas: ${d.length} registro(s).`, "info");
+      concluirEtapaSincronizacao("TRADE_HISTORY");
       return;
     }
 
@@ -1101,7 +1182,11 @@ function tratarEventoOrdem(msg) {
     }
 
     if (tipoEvento === "ORDER_CANCEL_REJECTED") {
-      const motivo = RAZOES_REJEICAO[d.reason] || d.mensagem || d.message || d.reason || "Não foi possível cancelar a ordem.";
+      const motivo = d.reason === "INVALID_FIELDS"
+        ? "Ordem não encontrada ou indisponível para cancelamento."
+        : (String(d.status || "").toUpperCase() === "FILLED"
+          ? "Esta ordem já foi executada e não pode mais ser cancelada."
+          : (RAZOES_REJEICAO[d.reason] || d.mensagem || d.message || d.reason || "Não foi possível cancelar a ordem."));
       const msgRecusa = `Cancelamento recusado: ${motivo}`;
       log(msgRecusa, "erro");
       mostrarAlerta(msgRecusa, "erro");
@@ -1232,6 +1317,7 @@ function conectarStomp(token) {
     onWebSocketClose: () => {
       if (saindoVoluntariamente) return;
       const estavaConectado = estado.conexao.status === "conectado";
+      cancelarSincronizacaoPendente();
       estado.conexao.tentativas += 1;
       estado.conexao.status = "reconectando";
       desenharStatusConexao();
@@ -1243,6 +1329,7 @@ function conectarStomp(token) {
 
     onDisconnect: () => {
       if (saindoVoluntariamente) return;
+      cancelarSincronizacaoPendente();
       estado.conexao.status = "desconectado";
       desenharStatusConexao();
       log("Desconectado do servidor.", "erro");
@@ -1372,6 +1459,8 @@ async function entrar(nome, senha) {
 
   setErroAuth("");
   limparAlerta();
+  tradesProcessados.clear();
+  cancelarSincronizacaoPendente();
   estado.logs = [];
   estado.ordens = [];
   estado.negocios = [];
@@ -1433,6 +1522,8 @@ function sair() {
     stomp = null;
   }
   storageRemove("jwtToken");
+  tradesProcessados.clear();
+  cancelarSincronizacaoPendente();
   estado.usuario = null;
   estado.conexao.status = "desconectado";
   estado.conexao.jaConectou = false;

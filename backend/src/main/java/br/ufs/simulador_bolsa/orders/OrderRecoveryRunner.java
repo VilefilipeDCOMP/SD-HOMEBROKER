@@ -2,17 +2,25 @@ package br.ufs.simulador_bolsa.orders;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import br.ufs.simulador_bolsa.market.Asset;
+import br.ufs.simulador_bolsa.market.AssetCatalog;
+import br.ufs.simulador_bolsa.market.AssetEntity;
+import br.ufs.simulador_bolsa.market.AssetRepository;
 import br.ufs.simulador_bolsa.observability.MarketMetricsService;
+import br.ufs.simulador_bolsa.trades.TradeRepository;
 import br.ufs.simulador_bolsa.wallet.DatabaseWalletService;
 import lombok.RequiredArgsConstructor;
 
@@ -29,9 +37,19 @@ public class OrderRecoveryRunner {
     private final DatabaseWalletService walletService;
     private final MarketMetricsService metricsService;
 
+    @Autowired(required = false)
+    private AssetCatalog assetCatalog;
+
+    @Autowired(required = false)
+    private AssetRepository assetRepository;
+
+    @Autowired(required = false)
+    private TradeRepository tradeRepository;
+
     @EventListener(ApplicationReadyEvent.class)
     public List<Map<String, Object>> recoverOpenOrders() {
         persistenceService.seedDefaultAssetsIfNeeded();
+        sincronizarCatalogoAtivos();
 
         log.info("CRASH_RECOVERY_STARTED buscando ordens abertas no banco de dados...");
         List<OrderEntity> openOrders = orderRepository.findByStatusWithAssetAndUser("ABERTA");
@@ -105,5 +123,38 @@ public class OrderRecoveryRunner {
         report.put("totalRecoveredOrders", recovered.size());
         report.put("recoveredOrders", recovered);
         return report;
+    }
+
+    private void sincronizarCatalogoAtivos() {
+        if (assetCatalog == null) {
+            return;
+        }
+        Map<String, Long> volumesPorTicker = new HashMap<>();
+        if (tradeRepository != null) {
+            for (TradeRepository.AssetVolumeProjection item : tradeRepository.sumVolumeGroupedByTicker()) {
+                if (item.getTicker() != null && item.getVolume() != null) {
+                    volumesPorTicker.put(item.getTicker().trim().toUpperCase(Locale.ROOT), item.getVolume());
+                }
+            }
+        }
+        Map<String, AssetEntity> ativosBanco = new HashMap<>();
+        if (assetRepository != null) {
+            for (AssetEntity entity : assetRepository.findAll()) {
+                if (entity.getTicker() != null) {
+                    ativosBanco.put(entity.getTicker().trim().toUpperCase(Locale.ROOT), entity);
+                }
+            }
+        }
+        for (Asset atual : assetCatalog.listAll()) {
+            String ticker = atual.symbol().trim().toUpperCase(Locale.ROOT);
+            AssetEntity salvo = ativosBanco.get(ticker);
+            long volume = volumesPorTicker.getOrDefault(ticker, 0L);
+            assetCatalog.syncMarketData(
+                    ticker,
+                    atual.name(),
+                    salvo != null && salvo.getPrecoAtual() != null ? salvo.getPrecoAtual() : atual.currentPrice(),
+                    volume
+            );
+        }
     }
 }
