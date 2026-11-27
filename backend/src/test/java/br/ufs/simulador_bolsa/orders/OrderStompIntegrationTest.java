@@ -4,14 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Type;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -50,8 +53,39 @@ class OrderStompIntegrationTest {
     private AuthService authService;
 
     @Autowired
+    private OrderService orderService;
+
+    @Autowired
+    private OrderProcessor orderProcessor;
+
+    @Autowired
+    private OrderRepository orderRepository;
+
+    @Autowired
     @Qualifier("brokerChannel")
     private AbstractSubscribableChannel brokerChannel;
+
+    private final List<Long> createdUserIds = new CopyOnWriteArrayList<>();
+    private final List<String> createdUsernames = new CopyOnWriteArrayList<>();
+
+    @AfterEach
+    void cleanupStompOrders() {
+        orderProcessor.awaitIdle();
+        for (String username : createdUsernames) {
+            for (Order order : orderService.findByUser(username)) {
+                orderService.cancelOrder(order.orderId(), username);
+            }
+        }
+        orderProcessor.awaitIdle();
+        for (Long userId : createdUserIds) {
+            List<OrderEntity> userOrders = orderRepository.findByUsuarioIdOrderByCriadoEmDesc(userId);
+            if (!userOrders.isEmpty()) {
+                orderRepository.deleteAll(userOrders);
+            }
+        }
+        createdUsernames.clear();
+        createdUserIds.clear();
+    }
 
     private StompFrameHandler collector(BlockingQueue<JsonNode> sink) {
         return new StompFrameHandler() {
@@ -69,6 +103,8 @@ class OrderStompIntegrationTest {
 
     private StompSession connect(WebSocketStompClient client) throws Exception {
         var auth = authService.register("m3_test_" + UUID.randomUUID(), "test-password");
+        createdUserIds.add(auth.userId());
+        createdUsernames.add(auth.username());
         var headers = new StompHeaders();
         headers.add("Authorization", "Bearer " + auth.token());
         StompSession session = client.connectAsync(

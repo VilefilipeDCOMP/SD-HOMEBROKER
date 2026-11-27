@@ -142,11 +142,20 @@ public class OrderPersistenceService {
 
     @Transactional
     public void markOrderCancelled(Order order) {
-        if (order == null || order.databaseId() == null) return;
-        orderRepository.findById(order.databaseId()).ifPresent(entity -> {
-            entity.setStatus("CANCELADA");
-            orderRepository.save(entity);
-            log.info("ORDER_DB_CANCELLED orderId={} dbId={}", order.orderId(), entity.getId());
-        });
+        if (order == null || order.databaseId() == null) {
+            throw new IllegalStateException("Ordem sem registro no banco");
+        }
+
+        OrderEntity entity = orderRepository.findById(order.databaseId())
+                .orElseThrow(() -> new IllegalStateException("Ordem não encontrada no banco"));
+
+        if (!"ABERTA".equals(entity.getStatus())) {
+            throw new IllegalStateException("Ordem não está aberta no banco");
+        }
+
+        entity.setStatus("CANCELADA");
+        orderRepository.save(entity);
+
+        log.info("ORDER_DB_CANCELLED orderId={} dbId={}", order.orderId(), entity.getId());
     }
 }

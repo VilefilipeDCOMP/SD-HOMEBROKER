@@ -2,6 +2,8 @@ package br.ufs.simulador_bolsa.orders;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -29,7 +31,7 @@ public class OrderProcessor {
     private final WalletPort wallet;
     private final OrderNotifier notifier;
     private final MatchingEngine engine;
-    private final BlockingQueue<Order> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+    private final BlockingQueue<OrderCommand> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
     @Autowired(required = false)
     private OrderPersistenceService persistenceService;
@@ -54,23 +56,58 @@ public class OrderProcessor {
     @PreDestroy
     public synchronized void shutdown() {
         if (consumer == null) return;
+
         running = false;
         consumer.interrupt();
+
+        int pending = queue.size();
+
+        OrderCommand command;
+
+        while ((command = queue.poll()) != null) {
+            switch (command) {
+                case OrderCommand.Cancel cancel ->
+                        cancel.result().completeExceptionally(new RejectedExecutionException("Processador encerrado")
+                        );
+
+                case OrderCommand.Submit submit ->
+                        submit.order().reject(RejectReason.INTERNAL_ERROR);
+
+                case OrderCommand.Flush flush ->
+                        flush.result().complete(null);
+            }
+        }
+
         try {
             consumer.join(2000);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();//mata a thread atual
+            Thread.currentThread().interrupt();
         }
+
         consumer = null;
-        //e o que foi perdido com esse shutdown, fica registrado no log
-        int pending = queue.size();
+
         if (pending > 0) {
             log.warn("ORDER_QUEUE_DISCARDED pendentes={}", pending);
         }
     }
 
-    public boolean enqueue(Order order) {
-        return queue.offer(order);
+    public synchronized boolean enqueue(Order order) {
+        return running && queue.offer(new OrderCommand.Submit(order));
+    }
+
+    public synchronized CompletableFuture<Boolean> enqueueCancel(Order order) {
+        CompletableFuture<Boolean> result = new CompletableFuture<>();
+
+        if (!running) {
+            result.completeExceptionally(new RejectedExecutionException("Processador indisponível"));
+            return result;
+        }
+
+        if (!queue.offer(new OrderCommand.Cancel(order, result))) {
+            result.completeExceptionally(new RejectedExecutionException("Fila de ordens cheia"));
+        }
+
+        return result;
     }
 
     //contagem de quantas ações estao na fila
@@ -78,17 +115,52 @@ public class OrderProcessor {
         return queue.size();
     }
 
+    public void awaitIdle() {
+        CompletableFuture<Void> done;
+        synchronized (this) {
+            if (!running) {
+                return;
+            }
+            done = new CompletableFuture<>();
+            if (!queue.offer(new OrderCommand.Flush(done))) {
+                throw new RejectedExecutionException("Fila de ordens cheia");
+            }
+        }
+        done.join();
+    }
+
     //é o "do", fica rodando ai até dar exception de interrupcao
     private void runLoop() {
         while (running) {
             try {
-                process(queue.take());
+                OrderCommand command = queue.take();
+
+                switch (command) {
+                    case OrderCommand.Submit submit -> process(submit.order());
+                    case OrderCommand.Cancel cancel -> processCancel(cancel);
+                    case OrderCommand.Flush flush -> flush.result().complete(null);
+                }
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             } catch (RuntimeException e) {
                 log.error("ORDER_PROCESSOR_ERROR", e);
             }
+        }
+    }
+
+    private void processCancel(OrderCommand.Cancel command) {
+        try {
+            boolean cancelled = engine.cancelFromBook(command.order());
+
+            command.result().complete(cancelled);
+
+        } catch (RuntimeException e) {
+            log.error("ORDER_CANCEL_FAILED orderId={}",
+                    command.order().orderId(), e);
+
+            command.result().completeExceptionally(e);
         }
     }
 
@@ -124,14 +196,39 @@ public class OrderProcessor {
         double latencyMs = order.elapsedMillis();
 
         if (reserved) {
-            order.accept();
             if (persistenceService != null) {
                 try {
-                    persistenceService.persistOpenOrder(order);
+                    Long databaseId = persistenceService.persistOpenOrder(order);
+
+                    if (databaseId == null) {
+                        throw new IllegalStateException("Não foi possível persistir a ordem");
+                    }
+
                 } catch (RuntimeException e) {
-                    log.warn("ORDER_DB_PERSIST_WARN orderId={} reason={}", order.orderId(), e.getMessage());
+                    log.error("ORDER_DB_PERSIST_FAILED orderId={}", order.orderId(), e);
+
+                    order.assignDatabaseId(null);
+
+                    if (order.side() == OrderSide.BUY) {
+                        wallet.releaseFunds(order.userId(), order.totalValue()
+                        );
+                    } else {
+                        wallet.releaseShares(order.userId(), order.symbol(), order.quantity()
+                        );
+                    }
+
+                    order.reject(RejectReason.INTERNAL_ERROR);
+
+                    if (metricsService != null) {
+                        metricsService.recordOrderRejected(order.elapsedMillis());
+                    }
+                    log.info("ORDER_REJECTED orderId={} reason={}", order.orderId(), RejectReason.INTERNAL_ERROR);
+
+                    return;
                 }
             }
+
+            order.accept();
             if (metricsService != null) {
                 metricsService.recordOrderAccepted(latencyMs);
             }
