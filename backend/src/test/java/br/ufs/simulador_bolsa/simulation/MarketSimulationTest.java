@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -48,6 +49,11 @@ class MarketSimulationTest {
     private final OrderService orders = new OrderService(new OrderValidator(catalog), processor);
     private final MarketSimulation simulation = createSimulation();
 
+    @BeforeEach
+    void start() {
+        processor.start();
+    }
+
     @AfterEach
     void shutdown() {
         processor.shutdown();
@@ -64,9 +70,9 @@ class MarketSimulationTest {
         simulation.applyEvent(news);
         simulation.submitOrders();
         simulation.submitOrders();
-        assertEquals(8, processor.pendingCount());
-        processor.start();
         assertTrue(accepted.await(5, TimeUnit.SECONDS));
+        assertEquals(4, orders.findByUser(CONSERVATIVE).size());
+        assertEquals(4, orders.findByUser(ACTIVE).size());
 
         Order conservative = findOrder(CONSERVATIVE, SYMBOL);
         assertEquals(OrderSide.BUY, conservative.side());
